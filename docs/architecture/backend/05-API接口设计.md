@@ -60,7 +60,7 @@ Authorization: Bearer <access_token>
 | 分类 | 接口数 | 说明 |
 |------|-------|------|
 | 系统接口 | 2 | 健康检查、根路径 |
-| 认证接口 | 3 | 登录、刷新Token、登出 |
+| 认证接口 | 4 | 登录、刷新Token、登出、当前用户 |
 | 查询接口 | 4 | 查询、提问优化、澄清确认、反馈 |
 | 文档管理 | 5 | 上传、列表、详情、删除、重新处理 |
 | 术语管理 | 3 | 列表、新增、删除 |
@@ -128,10 +128,14 @@ POST /api/v1/auth/login
   "user": {
     "id": 1,
     "username": "admin",
-    "role": "admin"
+    "email": "admin@electric-rag.com",
+    "role": "admin",
+    "full_name": "系统管理员"
   }
 }
 ```
+
+> `role` 可选值：`admin`（管理员） / `user`（普通用户） / `readonly`（只读用户）
 
 ### 4.2 刷新 Token
 
@@ -168,6 +172,29 @@ POST /api/v1/auth/logout
 {
   "code": 0,
   "message": "登出成功"
+}
+```
+
+---
+
+### 4.4 获取当前用户信息
+
+```
+GET /api/v1/auth/me
+```
+
+**请求头**：`Authorization: Bearer <token>`
+
+**响应**：
+```json
+{
+  "id": 1,
+  "username": "admin",
+  "email": "admin@electric-rag.com",
+  "role": "admin",
+  "full_name": "系统管理员",
+  "query_count": 0,
+  "last_login_at": "2026-07-06T17:00:00"
 }
 ```
 
@@ -211,6 +238,7 @@ POST /api/v1/query
 | lane | string | 路由车道：fast/slow |
 | retrieval_time | int | 检索耗时（ms） |
 | generation_time | int | 生成耗时（ms） |
+| expanded_queries | array | 扩展的查询（HyDE/多Query，便于理解检索过程） |
 | query_log_id | int | 查询日志ID（用于反馈） |
 
 ```json
@@ -218,8 +246,9 @@ POST /api/v1/query
   "answer": "根据GB 50057-2010第3.2.1条，10kV配电室的安全距离应满足...",
   "citations": [
     {
-      "doc_id": "100",
+      "doc_id": 100,
       "title": "GB 50057-2010 建筑物防雷设计规范",
+      "standard_no": "GB 50057-2010",
       "clause": "3.2.1",
       "content": "配电室安全距离不应小于...",
       "page": 15
@@ -228,6 +257,7 @@ POST /api/v1/query
   "lane": "fast",
   "retrieval_time": 1200,
   "generation_time": 800,
+  "expanded_queries": ["10kV配电室安全距离", "10千伏配电室安全间距"],
   "query_log_id": 12345
 }
 ```
@@ -291,6 +321,17 @@ POST /api/v1/query/optimize
 | clarify_optional | 0.6-0.8 | 非阻断澄清卡片 |
 | clarify_required | 0.8-1.0 | 阻断式弹窗 |
 
+**澄清流程衔接**：
+
+本接口只负责生成澄清选项，不直接执行查询。前端根据用户选择完成后续流转，无需额外接口：
+
+1. `none` → 直接调用 `POST /api/v1/query`（使用原始 query）
+2. `suggest` / `clarify_optional` / `clarify_required` → 展示 `options`
+3. 用户选择某个选项 → 前端取该选项的 `refined_query`，调用 `POST /api/v1/query`
+4. 用户选择"以上都不是，自行输入" → 前端用用户新输入的文本调用 `POST /api/v1/query`
+
+> 澄清对话的用户选择、自定义输入等数据由后端在查询时记录到 `clarification_logs` 表，用于 Loop Engineering 分析。
+
 ---
 
 ### 5.3 提交用户反馈
@@ -345,6 +386,9 @@ GET /api/v1/query/history
       "query": "10kV配电室安全距离要求",
       "answer": "根据GB 50057...",
       "lane": "fast",
+      "recall_success": true,
+      "total_time": 2000,
+      "feedback_score": 5,
       "created_at": "2026-07-06T17:00:00"
     }
   ]
@@ -515,11 +559,28 @@ GET /api/v1/documents/tasks/{task_id}
   "task_id": "celery-task-xxx",
   "status": "PROCESSING",
   "progress": 60,
-  "message": "正在向量化..."
+  "message": "正在向量化...",
+  "error": null
 }
 ```
 
-**状态值**：`PENDING` / `PROCESSING` / `SUCCESS` / `FAILURE`
+**响应字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| task_id | string | Celery 任务ID |
+| status | string | Celery 任务状态（见下） |
+| progress | int | 进度百分比（0-100） |
+| message | string | 当前步骤描述 |
+| error | string/null | 失败时的错误信息 |
+
+**status 状态值**：`PENDING` / `PROCESSING` / `SUCCESS` / `FAILURE`
+
+> **注意**：此处 `status` 是 **Celery 异步任务状态**（大写），与 `documents.process_status` 字段（`pending/processing/completed/failed`，小写）是两个不同概念：
+> - Celery 任务状态：描述后台任务本身的执行情况
+> - 文档处理状态：持久化在 documents 表中，描述文档的处理结果
+>
+> 任务完成后（SUCCESS），可通过「文档详情」接口查看 `process_status=completed`。
 
 ---
 
@@ -633,14 +694,18 @@ class TermCreateRequest(BaseModel):
     aliases: List[str]
     category: Optional[str] = None
     definition: Optional[str] = None
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
 ```
 
 ### 8.2 响应模型
 
 ```python
 class Citation(BaseModel):
-    doc_id: str
+    doc_id: int
     title: str
+    standard_no: Optional[str] = None
     clause: Optional[str] = None
     content: str
     page: Optional[int] = None
@@ -651,6 +716,7 @@ class QueryResponse(BaseModel):
     lane: Literal["fast", "slow"]
     retrieval_time: int
     generation_time: int
+    expanded_queries: List[str] = []
     query_log_id: int
 
 class ClarifyOption(BaseModel):
@@ -668,20 +734,54 @@ class OptimizeResponse(BaseModel):
 class DocumentResponse(BaseModel):
     id: int
     title: str
-    doc_type: str
+    doc_type: Literal["standard", "textbook", "manual", "regulation"]
     standard_no: Optional[str] = None
+    version: Optional[str] = None
+    publish_org: Optional[str] = None
+    publish_date: Optional[date] = None
+    implement_date: Optional[date] = None
     category: Optional[str] = None
     voltage_level: Optional[str] = None
-    status: str
-    process_status: str
+    abstract: Optional[str] = None
+    status: Literal["valid", "expired", "draft"]
+    process_status: Literal["pending", "processing", "completed", "failed"]
+    file_size: Optional[int] = None
+    page_count: Optional[int] = None
     chunk_count: int
+    view_count: int = 0
     created_at: datetime
+
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    status: Literal["PENDING", "PROCESSING", "SUCCESS", "FAILURE"]
+    progress: int
+    message: str
+    error: Optional[str] = None
 
 class PaginatedResponse(BaseModel):
     total: int
     page: int
     page_size: int
     items: List[dict]
+
+class UserInfo(BaseModel):
+    id: int
+    username: str
+    email: str
+    role: Literal["admin", "user", "readonly"]
+    full_name: Optional[str] = None
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserInfo
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
 ```
 
 ---
@@ -721,12 +821,15 @@ WS /ws/query?token=<access_token>
 {
   "type": "citation",
   "data": {
-    "doc_id": "100",
+    "doc_id": 100,
     "title": "GB 50057-2010 建筑物防雷设计规范",
+    "standard_no": "GB 50057-2010",
     "clause": "3.2.1"
   }
 }
 ```
+
+> 流式推送的 citation 仅含引用标识字段（doc_id/title/standard_no/clause），省略 `content`/`page` 以减少传输量；如需完整引用内容，前端可凭 doc_id 调用「文档详情」接口获取。
 
 **慢车道推理过程（可选）**：
 ```json

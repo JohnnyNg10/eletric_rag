@@ -1,8 +1,9 @@
 """
 Authentication schemas
 """
+from typing import Optional, Literal
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class LoginRequest(BaseModel):
@@ -21,7 +22,7 @@ class UserInfo(BaseModel):
     id: int
     username: str
     email: str
-    role: str
+    role: Literal["admin", "user", "readonly"]
     full_name: Optional[str] = None
 
 
