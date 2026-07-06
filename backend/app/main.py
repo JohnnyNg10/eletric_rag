@@ -86,9 +86,9 @@ async def health_check():
     }
 
 
-# 导入路由（稍后实现）
-# from app.api.v1.router import api_router
-# app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+# 导入路由
+from app.api.v1.router import api_router
+app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 
 if __name__ == "__main__":
