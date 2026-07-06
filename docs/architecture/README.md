@@ -13,7 +13,7 @@
 ### 🔧 后端架构文档
 
 - [04-后端架构设计.md](./backend/04-后端架构设计.md) - FastAPI后端整体架构
-- [05-API接口设计.md](./backend/05-API接口设计.md) - RESTful API接口规范（待补充）
+- [05-API接口设计.md](./backend/05-API接口设计.md) - RESTful API接口规范、WebSocket、错误码
 - [06-数据模型设计.md](./backend/06-数据模型设计.md) - 数据库设计、表结构、索引优化
 - [07-服务层设计.md](./backend/07-服务层设计.md) - 业务逻辑服务层设计（待补充）
 
