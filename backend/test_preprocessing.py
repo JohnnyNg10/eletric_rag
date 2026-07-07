@@ -4,9 +4,14 @@
 测试内容：
 1. 术语标准化
 2. 笼统度评估
-3. 查询改写
-4. 元数据提取
-5. 完整流程
+3. 完整预处理流程
+4. 查询改写（快车道组件）
+5. 元数据提取（快车道组件）
+
+注意：
+- QueryRewriter 和 MetadataExtractor 已移至快车道
+- 它们由 FastLane 调用，不再从 preprocessing 模块导出
+- 但仍可从文件直接导入进行单元测试
 """
 import asyncio
 import sys
@@ -21,9 +26,10 @@ from app.core.preprocessing import (
     PreprocessingInput,
     TermNormalizer,
     QueryOptimizer,
-    QueryRewriter,
-    MetadataExtractor
 )
+# 直接从文件导入（用于单元测试）
+from app.core.preprocessing.query_rewriter import QueryRewriter
+from app.core.preprocessing.metadata_extractor import MetadataExtractor
 
 
 async def test_term_normalizer():
@@ -134,14 +140,11 @@ async def test_full_pipeline():
     inp1 = PreprocessingInput(
         query="10千伏配电房的刀闸安全距离要求",
         user_context={'user_id': 1},
-        enable_optimization=True,
-        enable_expansion=True
+        enable_optimization=True
     )
     out1 = await preprocessor.preprocess(inp1)
     print(f"状态: {out1.status}")
     print(f"优化后: {out1.optimized_query}")
-    print(f"扩展查询: {out1.expanded_queries}")
-    print(f"过滤条件: {out1.filters}")
     print(f"笼统度: {out1.vagueness_score:.2f}")
     print()
 
@@ -150,8 +153,7 @@ async def test_full_pipeline():
     inp2 = PreprocessingInput(
         query="接地要求",
         user_context={'user_id': 1},
-        enable_optimization=True,
-        enable_expansion=True
+        enable_optimization=True
     )
     out2 = await preprocessor.preprocess(inp2)
     print(f"状态: {out2.status}")
@@ -167,14 +169,15 @@ async def test_full_pipeline():
     inp3 = PreprocessingInput(
         query="GB 50057-2010关于35kV变电站的防雷要求",
         user_context={'user_id': 1},
-        enable_optimization=True,
-        enable_expansion=True
+        enable_optimization=True
     )
     out3 = await preprocessor.preprocess(inp3)
     print(f"状态: {out3.status}")
     print(f"优化后: {out3.optimized_query}")
-    print(f"元数据: {out3.metadata}")
-    print(f"过滤条件: {out3.filters}")
+    print()
+
+    print("注意：查询改写和元数据提取已移至快车道（FastLane）")
+    print("      在完整流程中，它们由 QueryService → Router → FastLane 调用")
     print()
 
 

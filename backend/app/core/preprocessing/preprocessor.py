@@ -1,16 +1,23 @@
 """
-预处理层协调器 - 整合所有预处理组件
+预处理层协调器
 
-按照 08-RAG功能层次与状态机.md 定义的流程：
-原始查询 → 术语标准化 → 笼统度评估 → 查询改写 → 元数据提取 → 输出
+职责（按照 08-RAG功能层次与状态机.md）：
+1. 术语标准化：行业黑话 → 标准术语
+2. 笼统度评估：判断是否需要澄清
+
+注意：查询改写和元数据提取已移至快车道（retrieval/fast_lane.py），
+在路由决策后执行，符合架构设计。
+
+重构说明：
+- QueryRewriter 和 MetadataExtractor 保留在 preprocessing/ 目录（代码位置）
+- 但逻辑上它们属于快车道，由 FastLane 调用
+- Preprocessor 不再直接调用这两个组件
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 from .term_normalizer import TermNormalizer
 from .query_optimizer import QueryOptimizer, OptimizationResult
-from .query_rewriter import QueryRewriter
-from .metadata_extractor import MetadataExtractor
 
 
 @dataclass
@@ -19,8 +26,6 @@ class PreprocessingInput:
     query: str
     user_context: Dict[str, Any]
     enable_optimization: bool = True
-    enable_expansion: bool = True
-    max_expansions: int = 3
 
 
 @dataclass
@@ -28,35 +33,32 @@ class PreprocessingOutput:
     """预处理输出"""
     status: str  # "ready" or "need_clarification"
     optimized_query: str
-    expanded_queries: List[str]
-    filters: Dict[str, Any]
-    clarification_options: Optional[List[Dict]] = None
+    clarification_options: Optional[list] = None
     vagueness_score: float = 0.0
-    metadata: Dict[str, Any] = None
 
 
 class Preprocessor:
     """
     预处理协调器
 
-    职责：协调预处理层的4个组件，执行完整的预处理流程
+    职责：协调预处理层的2个核心组件
+    - TermNormalizer: 术语标准化
+    - QueryOptimizer: 笼统度评估
     """
 
     def __init__(self):
         self.term_normalizer = TermNormalizer()
         self.query_optimizer = QueryOptimizer()
-        self.query_rewriter = QueryRewriter()
-        self.metadata_extractor = MetadataExtractor()
 
     async def preprocess(self, input_data: PreprocessingInput) -> PreprocessingOutput:
         """
-        执行完整的预处理流程
+        执行核心预处理流程
 
         流程：
         1. 术语标准化
         2. 笼统度评估（可选）
-        3. 查询改写（如果不需要澄清）
-        4. 元数据提取
+
+        注意：查询改写和元数据提取已移至快车道，在路由决策后执行。
 
         Args:
             input_data: 预处理输入
@@ -82,8 +84,6 @@ class Preprocessor:
                 return PreprocessingOutput(
                     status='need_clarification',
                     optimized_query=normalized_query,
-                    expanded_queries=[normalized_query],
-                    filters={},
                     clarification_options=[
                         {
                             'id': opt.id,
@@ -99,26 +99,11 @@ class Preprocessor:
         else:
             optimization_result = None
 
-        # 步骤3: 查询改写（生成扩展查询）
-        if input_data.enable_expansion:
-            expanded_queries = await self.query_rewriter.rewrite(
-                normalized_query,
-                max_expansions=input_data.max_expansions
-            )
-        else:
-            expanded_queries = [normalized_query]
-
-        # 步骤4: 元数据提取
-        filters = self.metadata_extractor.extract(normalized_query)
-        metadata = self.metadata_extractor.extract_all_metadata(normalized_query)
-
-        # 返回准备就绪的结果
+        # 返回准备就绪的查询（标准化后的清晰查询）
         return PreprocessingOutput(
             status='ready',
             optimized_query=normalized_query,
-            expanded_queries=expanded_queries,
-            filters=filters,
             clarification_options=None,
-            vagueness_score=optimization_result.vagueness_score if optimization_result else 0.0,
-            metadata=metadata
+            vagueness_score=optimization_result.vagueness_score if optimization_result else 0.0
         )
+
