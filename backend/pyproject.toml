@@ -33,6 +33,7 @@ dependencies = [
     "torch>=2.12.1",
     "transformers>=5.13.0",
     "uvicorn[standard]>=0.50.1",
+    "volcenginesdkarkruntime>=0.0.1",
 ]
 
 [dependency-groups]
