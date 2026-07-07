@@ -37,6 +37,10 @@ htmlcov/
 # Logs
 *.log
 
+# AI Models (large files)
+backend/models/
+models/
+
 # IDE / editor
 .vscode/
 .idea/

@@ -39,8 +39,21 @@ async def startup_event():
     """应用启动时执行"""
     logger.info("Starting application...")
 
-    # 检查数据库连接
-    logger.info("Checking database connection...")
+    # 1. 初始化AI模型（检查并下载）
+    logger.info("Step 1/2: Initializing AI models...")
+    from app.core.model_init import init_models
+
+    try:
+        models_ready = init_models()
+        if not models_ready:
+            logger.warning("Some models are not ready. The application may have limited functionality.")
+            logger.warning("You can continue, but some features may not work properly.")
+    except Exception as e:
+        logger.error(f"Model initialization failed: {e}")
+        logger.warning("Continuing startup without models. Please check model configuration.")
+
+    # 2. 检查数据库连接
+    logger.info("Step 2/2: Checking database connection...")
     if not check_db_connection():
         logger.error("Database connection failed! Please check your MySQL configuration.")
         logger.error(f"Connection string: {settings.DATABASE_URL.replace(settings.MYSQL_PASSWORD, '***')}")

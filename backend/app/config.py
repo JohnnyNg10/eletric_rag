@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Model Configuration
+    MODELS_DIR: str = "models"  # 模型存储目录
+    EMBEDDING_MODEL: str = "BAAI/bge-large-zh-v1.5"
+    RERANKER_MODEL_LARGE: str = "BAAI/bge-reranker-large"
+    RERANKER_MODEL_BASE: str = "BAAI/bge-reranker-base"
+    SPARSE_MODEL: str = "naver/efficient-splade-VI-BT-large-query"  # 稀疏向量模型
+    AUTO_DOWNLOAD_MODELS: bool = True  # 启动时自动下载缺失的模型
+
     class Config:
         env_file = ".env"
         case_sensitive = True
