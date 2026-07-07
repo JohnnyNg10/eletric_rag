@@ -41,6 +41,9 @@ htmlcov/
 backend/models/
 models/
 
+# PDF standards
+电力国标PDF/
+
 # IDE / editor
 .vscode/
 .idea/
