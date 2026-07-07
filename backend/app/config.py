@@ -47,10 +47,15 @@ class Settings(BaseSettings):
     # Elasticsearch
     ES_HOSTS: str = "http://localhost:9200"
     ES_INDEX: str = "documents"
+    # Elasticsearch
+    ELASTICSEARCH_HOST: str = "localhost"
+    ELASTICSEARCH_PORT: int = 9200
     ES_USER: Optional[str] = None
     ES_PASSWORD: Optional[str] = None
 
     # MinIO
+    MINIO_HOST: str = "localhost"
+    MINIO_PORT: int = 9000
     MINIO_ENDPOINT: str = "localhost:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
