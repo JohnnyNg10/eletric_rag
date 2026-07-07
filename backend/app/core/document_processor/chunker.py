@@ -1,0 +1,476 @@
+"""
+文档智能分块器
+
+支持：
+- 父子块混合结构
+- 标准文档：条款规则分块
+- 专业书籍：语义边界检测
+"""
+from typing import List, Dict, Optional
+import re
+import logging
+import hashlib
+
+logger = logging.getLogger(__name__)
+
+
+class Chunk:
+    """文档块（对应数据库 Chunk 模型）"""
+    def __init__(
+        self,
+        content: str,
+        chunk_type: str,  # "parent" or "child"
+        document_id: Optional[int] = None,
+        parent_chunk_id: Optional[int] = None,
+        **metadata
+    ):
+        self.document_id = document_id
+        self.parent_chunk_id = parent_chunk_id
+        self.content = content
+        self.content_hash = self._compute_hash(content)
+        self.chunk_type = chunk_type
+
+        # 位置信息
+        self.page_start = metadata.get("page_start")
+        self.page_end = metadata.get("page_end")
+        self.chapter = metadata.get("chapter")
+        self.section = metadata.get("section")
+        self.clause = metadata.get("clause")
+        self.position_in_doc = metadata.get("position_in_doc")
+
+        # 统计信息
+        self.char_count = len(content)
+        self.token_count = self._estimate_tokens(content)
+
+        # 扩展元数据
+        self.meta_data = metadata.get("meta_data", {})
+        self.related_chunk_ids = metadata.get("related_chunk_ids", [])
+
+        # 向量信息（稍后填充）
+        self.vector_id = None
+        self.has_dense_vector = False
+        self.has_sparse_vector = False
+
+        # 数据库 ID（插入后填充）
+        self.id = None
+
+    def _compute_hash(self, content: str) -> str:
+        """计算内容哈希"""
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+    def _estimate_tokens(self, text: str) -> int:
+        """估算 Token 数（中文约 1.5 字符/token）"""
+        return int(len(text) / 1.5)
+
+    def to_dict(self) -> Dict:
+        """转为字典（用于数据库插入）"""
+        return {
+            "document_id": self.document_id,
+            "parent_chunk_id": self.parent_chunk_id,
+            "content": self.content,
+            "content_hash": self.content_hash,
+            "chunk_type": self.chunk_type,
+            "page_start": self.page_start,
+            "page_end": self.page_end,
+            "chapter": self.chapter,
+            "section": self.section,
+            "clause": self.clause,
+            "position_in_doc": self.position_in_doc,
+            "token_count": self.token_count,
+            "char_count": self.char_count,
+            "meta_data": self.meta_data,
+            "related_chunk_ids": self.related_chunk_ids,
+            "vector_id": self.vector_id,
+            "has_dense_vector": self.has_dense_vector,
+            "has_sparse_vector": self.has_sparse_vector
+        }
+
+
+class DocumentChunker:
+    """文档分块器"""
+
+    def __init__(self):
+        self.embedder = None  # 延迟加载，用于语义边界检测
+
+    def chunk_document(
+        self,
+        content: str,
+        doc_metadata: Dict,
+        document_id: Optional[int] = None,
+        doc_type: str = "standard"  # "standard" or "textbook"
+    ) -> List[Chunk]:
+        """
+        文档分块
+
+        Args:
+            content: Markdown 格式内容
+            doc_metadata: 文档元数据
+            document_id: 数据库文档 ID
+            doc_type: 文档类型（标准/教材）
+
+        Returns:
+            父子块列表
+        """
+        if doc_type == "standard":
+            return self._chunk_standard(content, doc_metadata, document_id)
+        else:
+            return self._chunk_textbook(content, doc_metadata, document_id)
+
+    def _chunk_standard(self, content: str, doc_metadata: Dict, document_id: Optional[int]) -> List[Chunk]:
+        """
+        标准文档分块（按条款规则）
+
+        规则：
+        1. 父块：章节级别（包含多个条款）
+        2. 子块：单个条款
+        """
+        chunks = []
+        lines = content.split("\n")
+
+        current_chapter = None
+        current_section = None
+        current_clause_lines = []
+        chapter_child_chunks = []
+        position = 0
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 检测章（父块边界）
+            if self._is_chapter(line):
+                # 保存前一章
+                if current_chapter and chapter_child_chunks:
+                    parent_chunk = self._create_parent_chunk_standard(
+                        current_chapter,
+                        chapter_child_chunks,
+                        doc_metadata,
+                        document_id,
+                        position
+                    )
+                    chunks.append(parent_chunk)
+                    chunks.extend(chapter_child_chunks)
+                    position += 1
+
+                current_chapter = line
+                chapter_child_chunks = []
+                current_clause_lines = []
+
+            # 检测节
+            elif self._is_section(line):
+                current_section = line
+
+            # 检测条款（子块）
+            elif self._is_clause(line):
+                # 保存前一条款
+                if current_clause_lines:
+                    child_chunk = self._create_child_chunk_standard(
+                        current_clause_lines,
+                        doc_metadata,
+                        document_id,
+                        current_chapter,
+                        current_section,
+                        position
+                    )
+                    chapter_child_chunks.append(child_chunk)
+                    position += 1
+
+                current_clause_lines = [line]
+
+            else:
+                # 内容行
+                if current_clause_lines is not None:
+                    current_clause_lines.append(line)
+
+        # 保存最后一个条款
+        if current_clause_lines:
+            child_chunk = self._create_child_chunk_standard(
+                current_clause_lines,
+                doc_metadata,
+                document_id,
+                current_chapter,
+                current_section,
+                position
+            )
+            chapter_child_chunks.append(child_chunk)
+            position += 1
+
+        # 保存最后一章
+        if current_chapter and chapter_child_chunks:
+            parent_chunk = self._create_parent_chunk_standard(
+                current_chapter,
+                chapter_child_chunks,
+                doc_metadata,
+                document_id,
+                position
+            )
+            chunks.append(parent_chunk)
+            chunks.extend(chapter_child_chunks)
+
+        return chunks
+
+    def _chunk_textbook(self, content: str, doc_metadata: Dict, document_id: Optional[int]) -> List[Chunk]:
+        """
+        教材分块（语义边界检测）
+
+        使用 bge-large-zh-v1.5 计算段落相似度
+        """
+        chunks = []
+        paragraphs = self._split_paragraphs(content)
+
+        if len(paragraphs) < 2:
+            # 内容太少，直接作为一个父块
+            chunk = Chunk(
+                content=content,
+                chunk_type="parent",
+                document_id=document_id,
+                position_in_doc=0,
+                meta_data={
+                    "doc_title": doc_metadata.get("title"),
+                    "doc_type": "textbook"
+                }
+            )
+            chunks.append(chunk)
+            return chunks
+
+        # 使用语义相似度检测边界
+        boundaries = self._detect_semantic_boundaries(paragraphs)
+
+        # 根据边界切分父块
+        position = 0
+        start_idx = 0
+        for boundary in boundaries:
+            parent_content = "\n\n".join(paragraphs[start_idx:boundary])
+            if len(parent_content) > 100:  # 最小长度
+                parent_chunk = Chunk(
+                    content=parent_content,
+                    chunk_type="parent",
+                    document_id=document_id,
+                    position_in_doc=position,
+                    meta_data={
+                        "doc_title": doc_metadata.get("title"),
+                        "doc_type": "textbook",
+                        "paragraph_range": f"{start_idx}-{boundary}"
+                    }
+                )
+                chunks.append(parent_chunk)
+                position += 1
+
+                # 创建子块（每段作为子块）
+                for i in range(start_idx, boundary):
+                    if len(paragraphs[i]) > 50:
+                        child_chunk = Chunk(
+                            content=paragraphs[i],
+                            chunk_type="child",
+                            document_id=document_id,
+                            parent_chunk_id=None,  # 稍后设置
+                            position_in_doc=position,
+                            meta_data={
+                                "doc_title": doc_metadata.get("title"),
+                                "doc_type": "textbook",
+                                "paragraph_index": i
+                            }
+                        )
+                        chunks.append(child_chunk)
+                        position += 1
+
+            start_idx = boundary
+
+        return chunks
+
+    def _split_paragraphs(self, content: str) -> List[str]:
+        """将内容分割为段落"""
+        paragraphs = re.split(r"\n\s*\n", content)
+        return [p.strip() for p in paragraphs if p.strip()]
+
+    def _detect_semantic_boundaries(self, paragraphs: List[str]) -> List[int]:
+        """
+        检测语义边界
+
+        使用 bge-large-zh-v1.5 计算相邻段落余弦相似度
+        相似度骤降点 = 语义边界
+        """
+        if self.embedder is None:
+            from app.core.embedding import embedder
+            self.embedder = embedder
+
+        # 计算每段的向量
+        embeddings = []
+        for para in paragraphs:
+            if len(para) > 20:
+                emb = self.embedder.encode(para)
+                embeddings.append(emb)
+
+        # 计算相邻段落相似度
+        import numpy as np
+        similarities = []
+        for i in range(len(embeddings) - 1):
+            sim = np.dot(embeddings[i], embeddings[i + 1]) / (
+                np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[i + 1])
+            )
+            similarities.append(sim)
+
+        # 找出相似度骤降点
+        threshold = np.mean(similarities) - 0.5 * np.std(similarities)
+        boundaries = []
+        for i, sim in enumerate(similarities):
+            if sim < threshold:
+                boundaries.append(i + 1)
+
+        # 确保边界间隔不太小（至少3段）
+        filtered_boundaries = []
+        last_boundary = 0
+        for b in boundaries:
+            if b - last_boundary >= 3:
+                filtered_boundaries.append(b)
+                last_boundary = b
+
+        filtered_boundaries.append(len(paragraphs))
+        return filtered_boundaries
+
+    def _is_chapter(self, line: str) -> bool:
+        """判断是否为章标题"""
+        patterns = [
+            r"^#\s+第\s*\d+\s*章",      # # 第 5 章
+            r"^第\s*\d+\s*章",           # 第 5 章
+            r"^\d+\s+[^\d\.]",          # 1 范围（数字+空格+非数字非点）
+        ]
+        for pattern in patterns:
+            if re.match(pattern, line):
+                return True
+        return False
+
+    def _is_section(self, line: str) -> bool:
+        """判断是否为节标题"""
+        patterns = [
+            r"^##\s+第?\s*\d+\.\d+\s*节",
+            r"^第?\s*\d+\.\d+\s*节",
+        ]
+        for pattern in patterns:
+            if re.match(pattern, line):
+                return True
+        return False
+
+    def _is_clause(self, line: str) -> bool:
+        """判断是否为条款"""
+        patterns = [
+            r"^#{2,4}\s+\d+\.\d+",      # ## 5.2.1
+            r"^\d+\.\d+\.\d+\s",         # 5.2.1 (三级)
+            r"^\d+\.\d+\s+[^\d]",        # 5.2 技术要求（二级，后面不是数字）
+        ]
+        for pattern in patterns:
+            if re.match(pattern, line):
+                return True
+        return False
+
+    def _create_parent_chunk_standard(
+        self,
+        chapter_title: str,
+        child_chunks: List[Chunk],
+        doc_metadata: Dict,
+        document_id: Optional[int],
+        position: int
+    ) -> Chunk:
+        """创建父块（章节级别）"""
+        texts = [chapter_title] + [c.content for c in child_chunks]
+        full_content = "\n\n".join(texts)
+
+        chapter_no = self._extract_chapter_number(chapter_title)
+
+        # 页码范围（从子块获取，可能为 None）
+        page_starts = [c.page_start for c in child_chunks if c.page_start is not None]
+        page_ends = [c.page_end for c in child_chunks if c.page_end is not None]
+        page_start = min(page_starts) if page_starts else None
+        page_end = max(page_ends) if page_ends else None
+
+        return Chunk(
+            content=full_content,
+            chunk_type="parent",
+            document_id=document_id,
+            parent_chunk_id=None,
+            chapter=chapter_no,
+            page_start=page_start,
+            page_end=page_end,
+            position_in_doc=position,
+            meta_data={
+                "doc_title": doc_metadata.get("title"),
+                "standard_no": doc_metadata.get("standard_no"),
+                "chapter_title": chapter_title
+            }
+        )
+
+    def _create_child_chunk_standard(
+        self,
+        clause_lines: List[str],
+        doc_metadata: Dict,
+        document_id: Optional[int],
+        chapter_title: Optional[str],
+        section_title: Optional[str],
+        position: int
+    ) -> Chunk:
+        """创建子块（条款级别）"""
+        content = "\n".join(clause_lines)
+        clause_no = self._extract_clause_number(clause_lines[0])
+        clause_title = self._extract_clause_title(clause_lines[0])
+        chapter_no = self._extract_chapter_number(chapter_title) if chapter_title else None
+        section_no = self._extract_section_number(section_title) if section_title else None
+
+        return Chunk(
+            content=content,
+            chunk_type="child",
+            document_id=document_id,
+            parent_chunk_id=None,
+            chapter=chapter_no,
+            section=section_no,
+            clause=clause_no,
+            position_in_doc=position,
+            meta_data={
+                "doc_title": doc_metadata.get("title"),
+                "standard_no": doc_metadata.get("standard_no"),
+                "clause_title": clause_title,
+                "chapter_title": chapter_title,
+                "section_title": section_title
+            }
+        )
+
+    def _extract_clause_number(self, line: str) -> Optional[str]:
+        """提取条款号"""
+        match = re.match(r"^#{0,4}\s*(\d+\.\d+(?:\.\d+)?)", line)
+        return match.group(1) if match else None
+
+    def _extract_clause_title(self, line: str) -> Optional[str]:
+        """提取条款标题"""
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^\d+\.\d+(?:\.\d+)?\s*", "", line)
+        return line.strip() if line.strip() else None
+
+    def _extract_chapter_number(self, title: str) -> Optional[str]:
+        """提取章节号"""
+        if not title:
+            return None
+        # 匹配 "第 5 章" 或 "5." 或 "1 范围"
+        match = re.search(r"第?\s*(\d+)\s*章", title)
+        if match:
+            return match.group(1)
+        match = re.match(r"^#\s*(\d+)\.", title)
+        if match:
+            return match.group(1)
+        match = re.match(r"^(\d+)\s+", title)
+        if match:
+            return match.group(1)
+        return None
+
+    def _extract_section_number(self, title: str) -> Optional[str]:
+        """提取节号"""
+        if not title:
+            return None
+        match = re.search(r"第?\s*(\d+\.\d+)\s*节", title)
+        if match:
+            return match.group(1)
+        match = re.match(r"^##\s*(\d+\.\d+)", title)
+        return match.group(1) if match else None
+
+
+# 全局实例
+document_chunker = DocumentChunker()
