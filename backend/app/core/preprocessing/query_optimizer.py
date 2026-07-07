@@ -2,12 +2,15 @@
 查询优化器 - 预处理层第二步
 
 职责：
-1. 评估查询笼统度
-2. 生成澄清选项
+1. 评估查询笼统度（使用 LLM，规则作为降级方案）
+2. 生成澄清选项（当前为模板，后续接入知识库动态生成）
 3. 决策优化策略
 """
 from typing import List, Dict, Optional
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,13 +35,13 @@ class QueryOptimizer:
     """查询优化器"""
 
     def __init__(self):
-        # 笼统查询关键词
+        # 笼统查询关键词（规则降级使用）
         self.vague_keywords = [
             "要求", "规定", "标准", "怎么", "如何", "什么",
             "哪些", "多少", "是否", "能不能"
         ]
 
-        # 具体查询特征
+        # 具体查询特征（规则降级使用）
         self.specific_indicators = [
             r'\d+kV',  # 电压等级
             r'GB\s*\d+',  # 标准号
@@ -56,7 +59,7 @@ class QueryOptimizer:
         Returns:
             OptimizationResult: 优化结果
         """
-        # 1. 评估笼统度
+        # 1. 评估笼统度（LLM优先，规则降级）
         vagueness_score = await self.assess_vagueness(query)
 
         # 2. 根据笼统度决策策略
@@ -85,7 +88,59 @@ class QueryOptimizer:
 
     async def assess_vagueness(self, query: str) -> float:
         """
-        评估笼统度
+        评估笼统度（使用 LLM，规则作为降级方案）
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            float: 笼统度评分 0-1（0=非常具体，1=非常笼统）
+        """
+        try:
+            # 尝试 LLM 评估
+            from app.core.generation import llm_client
+            import json
+
+            prompt = f"""
+评估以下电力专业查询的明确程度（0-1分）：
+
+查询：{query}
+
+评分标准：
+- 0.0-0.3：明确（含标准号/条款号/具体参数/完整上下文）
+  示例："GB 50057-2010第3.2.1条关于接地电阻的规定"
+- 0.3-0.6：轻度笼统（缺少电压等级、应用场景或设备类型之一）
+  示例："10kV配电装置与建筑物距离"（缺少室内/室外、架空/电缆）
+- 0.6-0.8：中度笼统（只有大类概念，缺少多个关键维度）
+  示例："隔离开关技术要求"（缺少电压等级、应用场景、具体参数类型）
+- 0.8-1.0：严重笼统（仅有笼统描述，缺少所有关键信息）
+  示例："配电规定"、"继电保护要求"
+
+仅返回JSON格式：{{"score": 0.X, "reason": "缺失维度说明"}}
+"""
+
+            response = llm_client.chat([
+                {"role": "system", "content": "你是电力标准知识库助手，专注评估查询明确性。回答必须是有效JSON。"},
+                {"role": "user", "content": prompt}
+            ], temperature=0.1, max_tokens=150)
+
+            # 解析 JSON
+            result = json.loads(response.strip())
+            score = float(result.get("score", 0.5))
+
+            # 日志记录（用于后续优化）
+            logger.info(f"LLM vagueness assessment: query='{query}', score={score}, reason={result.get('reason')}")
+
+            return max(0.0, min(1.0, score))
+
+        except Exception as e:
+            # LLM 失败时降级到规则评估
+            logger.warning(f"LLM vagueness assessment failed, fallback to rule-based: {e}")
+            return await self._rule_based_vagueness(query)
+
+    async def _rule_based_vagueness(self, query: str) -> float:
+        """
+        规则评估（降级方案）
 
         评估规则：
         1. 查询长度（越短越笼统）
@@ -96,7 +151,7 @@ class QueryOptimizer:
             query: 查询文本
 
         Returns:
-            float: 笼统度评分 0-1（0=非常具体，1=非常笼统）
+            float: 笼统度评分 0-1
         """
         score = 0.0
 
@@ -129,7 +184,7 @@ class QueryOptimizer:
         query: str
     ) -> List[OptimizationOption]:
         """
-        生成澄清选项
+        生成澄清选项（当前为模板生成，TODO: 未来接入知识库动态生成）
 
         Args:
             query: 查询文本
@@ -139,7 +194,7 @@ class QueryOptimizer:
         """
         options = []
 
-        # TODO: 未来从知识库动态生成
+        # TODO: 阶段2 - 结合知识库动态生成
         # 当前返回通用澄清选项
 
         options.append(OptimizationOption(
@@ -180,3 +235,4 @@ class QueryOptimizer:
         """
         # TODO: 未来基于历史查询或知识库生成
         return []
+
