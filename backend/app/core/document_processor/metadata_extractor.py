@@ -52,9 +52,9 @@ class MetadataExtractor:
         """从文件名提取元数据"""
         metadata = {}
 
-        # 提取标准号（GB 1002-2024, DL/T 621-1997）
+        # 提取标准号（GB 1002-2024, DL/T 621-1997, GB+1002-2024）
         patterns = [
-            r"(GB|DL|NB|JB|HG)[\s_/\\]*([T\s]*)?[\s_]*(\d+(?:\.\d+)?)[_\s-]*(\d{4})",
+            r"(GB|DL|NB|JB|HG)[\s_/\\+]*([T\s]*)?[\s_]*(\d+(?:\.\d+)?)[_\s\-—]*(\d{4})",
         ]
 
         for pattern in patterns:

@@ -391,7 +391,7 @@ class StructuredRecall:
             query = self.db.query(Chunk, Document).join(
                 Document, Chunk.document_id == Document.id
             ).filter(
-                Document.standard_no == standard_no,
+                Document.standard_no.like(f'{standard_no}%'),
                 Chunk.clause == clause_no,
                 Document.status == 'valid'
             )
@@ -420,7 +420,7 @@ class StructuredRecall:
             query = self.db.query(Chunk, Document).join(
                 Document, Chunk.document_id == Document.id
             ).filter(
-                Document.standard_no == standard_no,
+                Document.standard_no.like(f'{standard_no}%'),
                 Document.status == 'valid'
             )
 
