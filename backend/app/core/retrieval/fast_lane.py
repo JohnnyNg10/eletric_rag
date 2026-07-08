@@ -9,7 +9,7 @@
 - 召回充分性判断
 - 可选二次检索
 """
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import logging
 import time
@@ -17,6 +17,9 @@ import time
 # 从 preprocessing 导入组件（这些组件逻辑上属于快车道）
 from app.core.preprocessing.query_rewriter import QueryRewriter
 from app.core.preprocessing.metadata_extractor import MetadataExtractor
+from app.core.retrieval.rerank import TwoStageReranker, RerankResult, get_reranker
+from app.core.retrieval.sufficiency import SufficiencyChecker, SufficiencyResult, get_sufficiency_checker
+from app.schemas.retrieval import ChunkResult
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +28,15 @@ logger = logging.getLogger(__name__)
 class FastLaneResult:
     """快车道检索结果"""
     status: str  # "success" or "insufficient"
-    retrieved_chunks: List[Dict]  # 召回的文档块
+    retrieved_chunks: List[Dict]  # 召回的文档块（转换为dict）
+    rerank_results: List[RerankResult]  # 重排结果（保留完整对象）
     expanded_queries: List[str]  # 扩展查询列表
     filters: Dict[str, Any]  # 元数据过滤条件
     metadata: Dict[str, Any]  # 提取的元数据
     retrieval_time: int  # 检索耗时(ms)
     retry_triggered: bool  # 是否触发二次检索
     recall_count: int  # 召回块数量
+    sufficiency_result: Optional[SufficiencyResult] = None  # 充分性判断结果
 
 
 class FastLane:
@@ -51,17 +56,20 @@ class FastLane:
     5. 可选二次检索（TODO）
     """
 
-    def __init__(self):
+    def __init__(self, db=None):
         # 快车道专属组件
         self.query_rewriter = QueryRewriter()
         self.metadata_extractor = MetadataExtractor()
-        
-        # TODO: 初始化召回器、重排器等
-        # self.vector_recall = VectorRecall()
-        # self.keyword_recall = KeywordRecall()
-        # self.structured_recall = StructuredRecall()
-        # self.reranker = TwoStageReranker()
-        # self.sufficiency_checker = SufficiencyChecker()
+
+        # 重排和充分性判断组件
+        self.reranker = get_reranker()
+        self.sufficiency_checker = get_sufficiency_checker()
+
+        # 数据库会话（用于召回层）
+        self.db = db
+
+        # 召回引擎（懒加载）
+        self._recall_engine = None
 
     async def execute(
         self,
@@ -93,41 +101,72 @@ class FastLane:
         logger.info(f"[FastLane] Filters: {filters}")
         logger.info(f"[FastLane] Metadata: {metadata}")
 
-        # TODO: 步骤2: 三路并行召回
-        # recalled_chunks = await self._multi_path_recall(expanded_queries, filters)
-        recalled_chunks = []  # 模拟
+        # 步骤2: 三路并行召回
+        recalled_chunks = await self._multi_path_recall(expanded_queries, filters)
+        logger.info(f"[FastLane] Recalled {len(recalled_chunks)} chunks")
 
-        # TODO: 步骤3: 两阶段重排
-        # reranked_chunks = await self._two_stage_rerank(query, recalled_chunks)
-        reranked_chunks = []  # 模拟
+        # 步骤3: 两阶段重排
+        reranked_results = await self.reranker.rerank(
+            query=query,
+            candidates=recalled_chunks,
+            top_k=5
+        )
+        logger.info(f"[FastLane] Reranked to Top{len(reranked_results)}")
 
-        # TODO: 步骤4: 充分性判断
-        # is_sufficient = await self._check_sufficiency(query, reranked_chunks)
-        is_sufficient = True  # 模拟
+        # 步骤4: 充分性判断
+        sufficiency_result = await self.sufficiency_checker.check(
+            query=query,
+            top_results=reranked_results
+        )
+        logger.info(f"[FastLane] Sufficiency: {sufficiency_result.sufficient} (source={sufficiency_result.source})")
+
         retry_triggered = False
+        retry_count = 0
 
-        # TODO: 步骤5: 可选二次检索
-        # if not is_sufficient and strategy_params.get("enable_retry", True):
-        #     logger.info(f"[FastLane] Sufficiency check failed, triggering retry")
-        #     refined_query = await self._refine_query(query, reranked_chunks)
-        #     retry_chunks = await self._multi_path_recall([refined_query], filters)
-        #     reranked_chunks = await self._two_stage_rerank(query, reranked_chunks + retry_chunks)
-        #     retry_triggered = True
+        # 步骤5: 可选二次检索
+        if not sufficiency_result.sufficient and strategy_params.get("enable_retry", True) and retry_count == 0:
+            logger.info(f"[FastLane] Sufficiency check failed, triggering retry")
+
+            # 基于gaps改写查询
+            retry_query = await self._refine_query_for_gaps(query, sufficiency_result.gaps)
+            logger.info(f"[FastLane] Retry query: {retry_query}")
+
+            # 补充召回
+            retry_chunks = await self._multi_path_recall([retry_query], filters)
+            logger.info(f"[FastLane] Retry recalled {len(retry_chunks)} chunks")
+
+            # 合并去重（保留原Top5 + 补充召回）
+            merged_chunks = self._merge_deduplicate(recalled_chunks, retry_chunks)
+
+            # 重新精排（Top8，比正常多3个）
+            reranked_results = await self.reranker.rerank(
+                query=query,
+                candidates=merged_chunks,
+                top_k=8
+            )
+            logger.info(f"[FastLane] Retry reranked to Top{len(reranked_results)}")
+
+            retry_triggered = True
+            retry_count = 1
 
         elapsed_ms = int((time.time() - start_time) * 1000)
-
         logger.info(f"[FastLane] Completed in {elapsed_ms}ms")
+
+        # 转换为dict格式（用于向后兼容）
+        retrieved_chunks_dict = [self._rerank_result_to_dict(r) for r in reranked_results]
 
         # 返回结果
         return FastLaneResult(
             status="success",
-            retrieved_chunks=reranked_chunks,
+            retrieved_chunks=retrieved_chunks_dict,
+            rerank_results=reranked_results,
             expanded_queries=expanded_queries,
             filters=filters,
             metadata=metadata,
             retrieval_time=elapsed_ms,
             retry_triggered=retry_triggered,
-            recall_count=len(reranked_chunks)
+            recall_count=len(reranked_results),
+            sufficiency_result=sufficiency_result
         )
 
     async def _enhance_query(self, query: str, strategy_params: Dict) -> List[str]:
@@ -163,19 +202,117 @@ class FastLane:
         """
         return self.metadata_extractor.extract(query)
 
-    # TODO: 实现以下方法（第二阶段完成）
-    # async def _multi_path_recall(self, queries: List[str], filters: Dict) -> List[Dict]:
-    #     """三路并行召回：向量 + 关键词 + 结构化"""
-    #     pass
-    #
-    # async def _two_stage_rerank(self, query: str, chunks: List[Dict]) -> List[Dict]:
-    #     """两阶段重排：粗排 + 精排"""
-    #     pass
-    #
-    # async def _check_sufficiency(self, query: str, chunks: List[Dict]) -> bool:
-    #     """召回充分性判断"""
-    #     pass
-    #
-    # async def _refine_query(self, query: str, chunks: List[Dict]) -> str:
-    #     """改写查询（用于二次检索）"""
-    #     pass
+    async def _multi_path_recall(
+        self,
+        queries: List[str],
+        filters: Dict[str, Any]
+    ) -> List[ChunkResult]:
+        """
+        三路并行召回：向量 + 关键词 + 结构化
+
+        Args:
+            queries: 扩展查询列表
+            filters: 元数据过滤条件
+
+        Returns:
+            List[ChunkResult]: Top50候选块
+        """
+        if not self.db:
+            logger.warning("[FastLane] No DB session, returning empty recall")
+            return []
+
+        # 懒加载召回引擎
+        if self._recall_engine is None:
+            from app.core.retrieval.recall import MultiPathRecall
+            self._recall_engine = MultiPathRecall(self.db)
+
+        # 使用第一个查询作为主查询
+        main_query = queries[0] if queries else ""
+
+        # 执行三路召回
+        recalled_chunks = await self._recall_engine.recall(
+            query=main_query,
+            filters=filters,
+            expanded_queries=queries
+        )
+
+        return recalled_chunks
+
+    async def _refine_query_for_gaps(
+        self,
+        original_query: str,
+        gaps: List[str]
+    ) -> str:
+        """
+        基于信息缺口改写查询（用于二次检索）
+
+        Args:
+            original_query: 原始查询
+            gaps: 信息缺口列表
+
+        Returns:
+            改写后的查询
+        """
+        if not gaps:
+            return original_query
+
+        # 调用QueryRewriter生成针对缺口的查询
+        gaps_text = "、".join(gaps)
+        refined_query = f"{original_query} {gaps_text}"
+
+        # TODO: 可以用LLM更智能地改写
+        # refined_query = await self.query_rewriter.rewrite_for_gaps(
+        #     original_query, gaps
+        # )
+
+        return refined_query
+
+    def _merge_deduplicate(
+        self,
+        original_chunks: List[ChunkResult],
+        retry_chunks: List[ChunkResult]
+    ) -> List[ChunkResult]:
+        """
+        合并去重（按chunk_id）
+
+        Args:
+            original_chunks: 原始召回块
+            retry_chunks: 补充召回块
+
+        Returns:
+            合并去重后的候选块
+        """
+        chunk_map = {}
+
+        # 先加入原始块
+        for chunk in original_chunks:
+            chunk_map[chunk.chunk_id] = chunk
+
+        # 加入补充块（不覆盖已有）
+        for chunk in retry_chunks:
+            if chunk.chunk_id not in chunk_map:
+                chunk_map[chunk.chunk_id] = chunk
+
+        # 按分数排序
+        merged = sorted(chunk_map.values(), key=lambda c: c.score, reverse=True)
+        return merged
+
+    def _rerank_result_to_dict(self, result: RerankResult) -> Dict[str, Any]:
+        """将RerankResult转换为dict"""
+        return {
+            'chunk_id': result.chunk_id,
+            'content': result.content,
+            'document_id': result.document_id,
+            'standard_no': result.standard_no,
+            'clause': result.clause,
+            'score': result.score,
+            'recall_source': result.recall_source,
+            'document_title': result.document_title,
+            'doc_type': result.doc_type,
+            'category': result.category,
+            'voltage_level': result.voltage_level,
+            'chapter': result.chapter,
+            'section': result.section,
+            'page_start': result.page_start,
+            'page_end': result.page_end,
+        }

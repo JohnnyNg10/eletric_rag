@@ -41,7 +41,7 @@ class QueryService:
     def __init__(self, db: Optional[Session] = None):
         self.preprocessor = Preprocessor()
         self.router = Router()
-        self.fast_lane = FastLane()
+        self.fast_lane = FastLane(db=db)  # 传入DB会话用于召回
         self.slow_lane = SlowLane()
         self.db = db  # 数据库会话，用于日志记录
 
@@ -131,7 +131,9 @@ class QueryService:
                 'metadata': retrieval_result.metadata,
                 'retrieval_time': retrieval_result.retrieval_time,
                 'retry_triggered': retrieval_result.retry_triggered,
-                'recall_count': retrieval_result.recall_count
+                'recall_count': retrieval_result.recall_count,
+                'rerank_results': retrieval_result.rerank_results,
+                'sufficiency_result': retrieval_result.sufficiency_result
             }
         else:
             # 慢车道：工具调用循环
@@ -229,6 +231,32 @@ class QueryService:
         Returns:
             int: 查询日志ID
         """
+        # 提取重排结果和充分性结果（仅快车道有）
+        rerank_scores = None
+        sufficiency_result_data = None
+        retrieved_chunk_ids = None
+
+        if lane == 'fast':
+            rerank_results = lane_info.get('rerank_results', [])
+            if rerank_results:
+                # 构造 rerank_scores JSON
+                rerank_scores = [
+                    {'chunk_id': r.chunk_id, 'score': r.score}
+                    for r in rerank_results
+                ]
+                # 构造 retrieved_chunk_ids
+                retrieved_chunk_ids = [r.chunk_id for r in rerank_results]
+
+            # 构造 sufficiency_result JSON
+            suf = lane_info.get('sufficiency_result')
+            if suf:
+                sufficiency_result_data = {
+                    'sufficient': suf.sufficient,
+                    'source': suf.source,
+                    'confidence': suf.confidence,
+                    'gaps': suf.gaps
+                }
+
         query_log = QueryLog(
             user_id=user_id,
             query=query,
@@ -239,7 +267,11 @@ class QueryService:
             retrieval_time=retrieval_time,
             total_time=total_time,
             recall_count=lane_info.get('recall_count', 0),
-            retry_count=1 if lane_info.get('retry_triggered', False) else 0
+            retry_count=1 if lane_info.get('retry_triggered', False) else 0,
+            retrieved_chunk_ids=retrieved_chunk_ids,
+            rerank_scores=rerank_scores,
+            sufficiency_result=sufficiency_result_data,
+            expanded_queries=lane_info.get('expanded_queries', [])
         )
 
         self.db.add(query_log)
@@ -247,6 +279,13 @@ class QueryService:
         self.db.refresh(query_log)
 
         logger.info(f"[QueryLog] Recorded query_log_id={query_log.id}")
+
+        # 如果充分性判断为不充分且触发了二次检索，考虑记录badcase
+        if lane == 'fast' and sufficiency_result_data:
+            if not sufficiency_result_data['sufficient'] and lane_info.get('retry_triggered', False):
+                # 二次检索后仍可能不充分，记录badcase
+                self._record_badcase_if_needed(query_log.id, sufficiency_result_data)
+
         return query_log.id
 
     def _record_clarification_log(
@@ -292,4 +331,38 @@ class QueryService:
 
         logger.info(f"[ClarificationLog] Recorded clarification_log_id={clarification_log.id} for query_log_id={query_log_id}")
         return clarification_log.id
+
+    def _record_badcase_if_needed(
+        self,
+        query_log_id: int,
+        sufficiency_result: Dict[str, Any]
+    ):
+        """
+        记录坏案例（当充分性不足时）
+
+        Args:
+            query_log_id: 查询日志ID
+            sufficiency_result: 充分性判断结果
+        """
+        try:
+            from app.db.models import BadcaseTracking
+
+            # 仅在LLM判断不充分时记录badcase
+            if sufficiency_result.get('source') == 'llm' and not sufficiency_result.get('sufficient'):
+                gaps = sufficiency_result.get('gaps', [])
+                root_cause_detail = '; '.join(gaps) if gaps else '充分性判断失败'
+
+                badcase = BadcaseTracking(
+                    query_log_id=query_log_id,
+                    root_cause='reranking',  # 重排层问题
+                    root_cause_detail=root_cause_detail,
+                    status='pending'
+                )
+
+                self.db.add(badcase)
+                self.db.commit()
+                logger.info(f"[BadcaseTracking] Recorded badcase for query_log_id={query_log_id}")
+
+        except Exception as e:
+            logger.error(f"[BadcaseTracking] Failed to record badcase: {e}", exc_info=True)
 
