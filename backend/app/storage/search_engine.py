@@ -296,6 +296,28 @@ class SearchEngine:
             logger.error(f"Failed to delete chunks: {e}")
             return False
 
+    def search(self, query_body: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        通用搜索方法（接受完整的 ES 查询体）
+
+        Args:
+            query_body: Elasticsearch 查询体
+
+        Returns:
+            List[Dict]: 搜索结果（包含 _score 和 _source）
+        """
+        try:
+            logger.info(f"[SearchEngine.search] Executing query on index '{self.index_name}'")
+            logger.info(f"[SearchEngine.search] Query body: {query_body}")
+            response = self.client.search(index=self.index_name, body=query_body)
+            hits = response["hits"]["hits"]
+            logger.info(f"[SearchEngine.search] Got {len(hits)} hits from ES")
+            return hits
+
+        except Exception as e:
+            logger.error(f"Search failed: {e}", exc_info=True)
+            return []
+
     def get_index_stats(self) -> Dict[str, Any]:
         """获取索引统计信息"""
         try:

@@ -75,6 +75,23 @@ class DocumentIngestionPipeline:
             # Step 0: 确保存储后端就绪
             self._ensure_storage_ready()
 
+            # Step 0.5: 检查文件是否已入库（通过文件哈希）
+            import hashlib
+            with open(pdf_path, 'rb') as f:
+                file_hash = hashlib.sha256(f.read()).hexdigest()
+
+            db = next(get_db())
+            existing_doc = db.query(Document).filter(Document.file_hash == file_hash).first()
+            if existing_doc:
+                logger.info(f"Document already exists (ID: {existing_doc.id}), skipping...")
+                return {
+                    "success": True,
+                    "document_id": existing_doc.id,
+                    "chunks_count": existing_doc.chunk_count,
+                    "message": "Document already indexed (skipped)",
+                    "skipped": True
+                }
+
             # Step 1: PDF 解析
             logger.info("Step 1: Parsing PDF...")
             parsed = pdf_parser.parse_pdf(str(pdf_path))
