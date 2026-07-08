@@ -207,6 +207,10 @@ class QueryLog(Base):
     retry_count = Column(Integer, default=0, comment="二次检索次数")
     retrieved_chunk_ids = Column(JSON, comment="召回的chunk IDs")
 
+    # 重排信息
+    rerank_scores = Column(JSON, nullable=True, comment="精排结果：[{chunk_id, score}]，Top5或Top8")
+    sufficiency_result = Column(JSON, nullable=True, comment="充分性判断结果：{sufficient, source, confidence, gaps}")
+
     # 提问优化信息
     vagueness_score = Column(Float, comment="笼统度评分")
     strategy = Column(String(30), comment="提问优化策略")
