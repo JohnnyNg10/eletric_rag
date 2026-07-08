@@ -77,8 +77,8 @@ class VectorRecall:
                 payload = result_dict['payload']
                 chunk_result = ChunkResult(
                     chunk_id=int(payload.get('chunk_id', 0)),
-                    document_id=int(payload.get('document_id', 0)),
-                    content=payload.get('content', ''),
+                    document_id=int(payload.get('doc_id', 0)),
+                    content=payload.get('text', ''),
                     score=result_dict['score'],
                     # 文档信息
                     document_title=payload.get('document_title'),
