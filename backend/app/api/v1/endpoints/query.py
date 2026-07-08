@@ -5,6 +5,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Optional
+from sqlalchemy.orm import Session
 import time
 import logging
 
@@ -19,18 +20,17 @@ from app.schemas.query import (
 from app.services.query_service import QueryService
 from app.api.deps import get_current_user
 from app.db.models import User
+from app.db.session import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# 初始化查询服务
-query_service = QueryService()
 
 
 @router.post("/", response_model=QueryResponse, summary="执行查询")
 async def execute_query(
     request: QueryRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     执行查询（核心接口）
@@ -44,17 +44,25 @@ async def execute_query(
        - 调用生成层
     3. 返回结果
 
-    当前实现：API层 + 服务层 + 预处理层 + 模拟响应
+    澄清流程：
+    - 如果 refined_query 不为空，说明用户选择了澄清选项
+    - 跳过笼统度评估，直接进入路由层
     """
     try:
         logger.info(f"[User {current_user.id}] Query: {request.query}")
+
+        # 初始化查询服务（注入数据库会话）
+        query_service = QueryService(db=db)
 
         # 调用服务层执行查询
         result = await query_service.execute_query(
             query=request.query,
             user_id=current_user.id,
             conversation_id=request.conversation_id,
-            filters=request.filters
+            filters=request.filters,
+            refined_query=request.refined_query,
+            selected_option_id=request.selected_option_id,
+            clarification_context=request.clarification_context
         )
 
         # 如果需要澄清，返回400错误
@@ -76,7 +84,7 @@ async def execute_query(
             lane=result['lane'],
             retrieval_time=result['retrieval_time'],
             generation_time=result['generation_time'],
-            expanded_queries=result['expanded_queries'],
+            expanded_queries=result.get('expanded_queries', []),
             query_log_id=result['query_log_id']
         )
 

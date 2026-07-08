@@ -51,7 +51,7 @@ class QueryOptimizer:
 
     async def optimize(self, query: str) -> OptimizationResult:
         """
-        优化查询
+        优化查询（一体化实现：在一次 LLM 调用中完成评估和优化）
 
         Args:
             query: 标准化后的查询
@@ -59,24 +59,136 @@ class QueryOptimizer:
         Returns:
             OptimizationResult: 优化结果
         """
-        # 1. 评估笼统度（LLM优先，规则降级）
-        vagueness_score = await self.assess_vagueness(query)
+        try:
+            # 尝试使用 LLM 一体化评估和优化
+            return await self._llm_optimize(query)
+        except Exception as e:
+            # LLM 失败时降级到规则方案
+            logger.warning(f"LLM optimize failed, fallback to rule-based: {e}")
+            return await self._rule_based_optimize(query)
+
+    async def _llm_optimize(self, query: str) -> OptimizationResult:
+        """
+        使用 LLM 一体化评估和优化（一次调用完成评估+澄清选项生成）
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            OptimizationResult: 优化结果
+        """
+        from app.core.generation import llm_client
+        import json
+
+        prompt = f"""
+你是电力标准知识库助手。分析以下查询的明确程度并生成澄清选项。
+
+查询：{query}
+
+任务：
+1. 评估笼统度（0-1分）
+   - 0.0-0.3：明确（含标准号/条款号/具体参数）
+   - 0.3-0.6：轻度笼统（缺少1个关键维度）
+   - 0.6-0.8：中度笼统（缺少多个关键维度）
+   - 0.8-1.0：严重笼统（缺少所有关键信息）
+
+2. 识别缺失维度（电压等级、应用场景、设备类型、参数类别等）
+
+3. 生成3个澄清选项（仅当笼统度>0.5时）
+   - 每个选项补充一个不同的缺失维度
+   - label：展示给用户的简短标题，5-12个字，点明核心区分维度
+   - refined_query：实际用于检索的完整句子，须包含原始查询的主题 + 补充的具体维度信息，15-30个字
+
+返回JSON格式：
+{{
+  "vagueness_score": 0.X,
+  "missing_dimensions": ["维度1", "维度2"],
+  "reason": "缺失维度说明",
+  "options": [
+    {{
+      "label": "10kV户内隔离开关技术参数",
+      "refined_query": "10kV户内隔离开关额定电流、额定电压及开断能力等技术参数要求"
+    }},
+    ...
+  ]
+}}
+
+注意：
+- 如果笼统度<=0.5，options 返回空数组 []
+- label 是给用户看的选项标题，要简洁
+- refined_query 是送入检索引擎的查询，要完整，和 label 内容不同
+"""
+
+        response = llm_client.chat([
+            {"role": "system", "content": "你是电力标准知识库助手，专注查询优化。回答必须是有效JSON。"},
+            {"role": "user", "content": prompt}
+        ], temperature=0.3, max_tokens=800)
+
+        # 解析 JSON
+        result = json.loads(response.strip())
+        vagueness_score = float(result.get("vagueness_score", 0.5))
+        missing_dimensions = result.get("missing_dimensions", [])
+        reason = result.get("reason", "")
+        raw_options = result.get("options", [])
+
+        # 日志记录
+        logger.info(
+            f"LLM optimize: query='{query}', score={vagueness_score:.2f}, "
+            f"missing={missing_dimensions}, options_count={len(raw_options)}"
+        )
+
+        # 决策策略
+        if vagueness_score > 0.7:
+            strategy = "clarify_required"
+        elif vagueness_score > 0.5:
+            strategy = "clarify_optional"
+        elif vagueness_score > 0.3:
+            strategy = "suggest"
+        else:
+            strategy = "none"
+
+        # 构建选项列表
+        options = []
+        if raw_options:
+            for i, opt in enumerate(raw_options[:3], 1):  # 最多3个
+                options.append(OptimizationOption(
+                    id=i,
+                    label=opt.get("label", f"{query}优化选项{i}"),
+                    refined_query=opt.get("refined_query", query),
+                    standard_preview=None,  # TODO: 阶段2从知识库获取
+                    doc_count=0  # TODO: 阶段2从知识库统计
+                ))
+
+        return OptimizationResult(
+            strategy=strategy,
+            vagueness_score=vagueness_score,
+            options=options
+        )
+
+    async def _rule_based_optimize(self, query: str) -> OptimizationResult:
+        """
+        规则方案（降级）：评估 + 优化
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            OptimizationResult: 优化结果
+        """
+        # 1. 评估笼统度
+        vagueness_score = await self._rule_based_vagueness(query)
 
         # 2. 根据笼统度决策策略
         if vagueness_score > 0.7:
-            # 非常笼统，必须澄清
             strategy = "clarify_required"
-            options = await self.generate_clarification_options(query)
+            options = await self._rule_based_clarification_options(query)
         elif vagueness_score > 0.5:
-            # 较笼统，建议澄清
             strategy = "clarify_optional"
-            options = await self.generate_clarification_options(query)
+            options = await self._rule_based_clarification_options(query)
         elif vagueness_score > 0.3:
-            # 轻微笼统，给出建议
             strategy = "suggest"
-            options = await self.generate_suggestions(query)
+            options = []  # 规则方案不生成建议
         else:
-            # 清晰查询，无需优化
             strategy = "none"
             options = []
 
@@ -86,55 +198,82 @@ class QueryOptimizer:
             options=options
         )
 
-    async def assess_vagueness(self, query: str) -> float:
+    async def _rule_based_clarification_options(
+        self,
+        query: str
+    ) -> List[OptimizationOption]:
         """
-        评估笼统度（使用 LLM，规则作为降级方案）
+        规则生成澄清选项（降级方案）
 
         Args:
             query: 查询文本
 
         Returns:
-            float: 笼统度评分 0-1（0=非常具体，1=非常笼统）
+            List[OptimizationOption]: 澄清选项列表
+        """
+        options = []
+
+        # 通用澄清选项模板
+        options.append(OptimizationOption(
+            id=1,
+            label=f"{query}的具体技术要求",
+            refined_query=f"{query}具体技术要求",
+            standard_preview="GB 50XXX",
+            doc_count=10
+        ))
+
+        options.append(OptimizationOption(
+            id=2,
+            label=f"{query}的安全距离规定",
+            refined_query=f"{query}安全距离",
+            standard_preview="DL/T XXX",
+            doc_count=8
+        ))
+
+        options.append(OptimizationOption(
+            id=3,
+            label=f"{query}的检测标准",
+            refined_query=f"{query}检测标准",
+            standard_preview="GB/T XXX",
+            doc_count=6
+        ))
+
+        return options
+
+    # ==================== 以下为兼容性方法（保留旧接口） ====================
+
+    async def assess_vagueness(self, query: str) -> float:
+        """
+        评估笼统度（兼容性方法，建议使用 optimize() 一体化接口）
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            float: 笼统度评分 0-1
         """
         try:
-            # 尝试 LLM 评估
-            from app.core.generation import llm_client
-            import json
-
-            prompt = f"""
-评估以下电力专业查询的明确程度（0-1分）：
-
-查询：{query}
-
-评分标准：
-- 0.0-0.3：明确（含标准号/条款号/具体参数/完整上下文）
-  示例："GB 50057-2010第3.2.1条关于接地电阻的规定"
-- 0.3-0.6：轻度笼统（缺少电压等级、应用场景或设备类型之一）
-  示例："10kV配电装置与建筑物距离"（缺少室内/室外、架空/电缆）
-- 0.6-0.8：中度笼统（只有大类概念，缺少多个关键维度）
-  示例："隔离开关技术要求"（缺少电压等级、应用场景、具体参数类型）
-- 0.8-1.0：严重笼统（仅有笼统描述，缺少所有关键信息）
-  示例："配电规定"、"继电保护要求"
-
-仅返回JSON格式：{{"score": 0.X, "reason": "缺失维度说明"}}
-"""
-
-            response = llm_client.chat([
-                {"role": "system", "content": "你是电力标准知识库助手，专注评估查询明确性。回答必须是有效JSON。"},
-                {"role": "user", "content": prompt}
-            ], temperature=0.1, max_tokens=150)
-
-            # 解析 JSON
-            result = json.loads(response.strip())
-            score = float(result.get("score", 0.5))
-
-            # 日志记录（用于后续优化）
-            logger.info(f"LLM vagueness assessment: query='{query}', score={score}, reason={result.get('reason')}")
-
-            return max(0.0, min(1.0, score))
-
+            result = await self._llm_optimize(query)
+            return result.vagueness_score
         except Exception as e:
-            # LLM 失败时降级到规则评估
+            logger.warning(f"LLM vagueness assessment failed, fallback to rule-based: {e}")
+            return await self._rule_based_vagueness(query)
+    # ==================== 以下为兼容性方法（保留旧接口） ====================
+
+    async def assess_vagueness(self, query: str) -> float:
+        """
+        评估笼统度（兼容性方法，建议使用 optimize() 一体化接口）
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            float: 笼统度评分 0-1
+        """
+        try:
+            result = await self._llm_optimize(query)
+            return result.vagueness_score
+        except Exception as e:
             logger.warning(f"LLM vagueness assessment failed, fallback to rule-based: {e}")
             return await self._rule_based_vagueness(query)
 
@@ -184,7 +323,7 @@ class QueryOptimizer:
         query: str
     ) -> List[OptimizationOption]:
         """
-        生成澄清选项（当前为模板生成，TODO: 未来接入知识库动态生成）
+        生成澄清选项（兼容性方法，建议使用 optimize() 一体化接口）
 
         Args:
             query: 查询文本
@@ -192,36 +331,12 @@ class QueryOptimizer:
         Returns:
             List[OptimizationOption]: 澄清选项列表
         """
-        options = []
-
-        # TODO: 阶段2 - 结合知识库动态生成
-        # 当前返回通用澄清选项
-
-        options.append(OptimizationOption(
-            id=1,
-            label=f"{query}的具体技术要求",
-            refined_query=f"{query}具体技术要求",
-            standard_preview="GB 50XXX",
-            doc_count=10
-        ))
-
-        options.append(OptimizationOption(
-            id=2,
-            label=f"{query}的安全距离规定",
-            refined_query=f"{query}安全距离",
-            standard_preview="DL/T XXX",
-            doc_count=8
-        ))
-
-        options.append(OptimizationOption(
-            id=3,
-            label=f"{query}的检测标准",
-            refined_query=f"{query}检测标准",
-            standard_preview="GB/T XXX",
-            doc_count=6
-        ))
-
-        return options
+        try:
+            result = await self._llm_optimize(query)
+            return result.options
+        except Exception as e:
+            logger.warning(f"LLM clarification generation failed, fallback to rule-based: {e}")
+            return await self._rule_based_clarification_options(query)
 
     async def generate_suggestions(self, query: str) -> List[OptimizationOption]:
         """

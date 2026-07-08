@@ -12,6 +12,11 @@ class QueryRequest(BaseModel):
     conversation_id: Optional[str] = Field(default=None, description="会话ID（多轮对话）")
     filters: Optional[Dict[str, Any]] = Field(default=None, description="手动指定过滤条件")
 
+    # 澄清功能字段
+    refined_query: Optional[str] = Field(default=None, description="用户选择澄清选项后的精炼查询")
+    selected_option_id: Optional[int] = Field(default=None, description="用户选择的澄清选项ID")
+    clarification_context: Optional[Dict[str, Any]] = Field(default=None, description="澄清上下文（包含原始query、vagueness_score等）")
+
     @field_validator('query')
     @classmethod
     def validate_query(cls, v: str) -> str:
@@ -19,6 +24,16 @@ class QueryRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("查询内容不能为空")
+        return v
+
+    @field_validator('refined_query')
+    @classmethod
+    def validate_refined_query(cls, v: Optional[str]) -> Optional[str]:
+        """验证精炼查询内容"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
         return v
 
 
