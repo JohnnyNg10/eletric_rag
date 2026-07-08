@@ -26,6 +26,10 @@ from app.core.retrieval import (
     FastLane,
     SlowLane
 )
+from app.core.generation import (
+    AnswerGenerator,
+    get_generator
+)
 from app.db.models import QueryLog, ClarificationLog
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,7 @@ class QueryService:
         self.router = Router()
         self.fast_lane = FastLane(db=db)  # 传入DB会话用于召回
         self.slow_lane = SlowLane()
+        self.generator = get_generator(enable_validation=False)  # 生成器（默认不开启验证以节省成本）
         self.db = db  # 数据库会话，用于日志记录
 
     async def execute_query(
@@ -151,11 +156,62 @@ class QueryService:
                 'recall_count': len(retrieval_result.retrieved_chunks)
             }
 
-        # TODO: 步骤4: 生成答案
-        # answer_result = await self.generator.generate(
-        #     query=preprocessing_output.optimized_query,
-        #     chunks=retrieval_result.retrieved_chunks
-        # )
+        # 步骤4: 生成答案
+        try:
+            # 从retrieval_result提取rerank结果
+            if route_decision.lane == "fast" and hasattr(retrieval_result, 'rerank_results'):
+                chunks_for_generation = retrieval_result.rerank_results
+            else:
+                # 慢车道或没有rerank结果时，从retrieved_chunks转换
+                from app.schemas.retrieval import ChunkResult
+                chunks_for_generation = []
+                for chunk_dict in retrieval_result.retrieved_chunks:
+                    if isinstance(chunk_dict, dict):
+                        # 转换dict为RerankResult格式供生成器使用
+                        from app.core.retrieval.rerank import RerankResult
+                        chunks_for_generation.append(RerankResult(
+                            chunk_id=chunk_dict.get('chunk_id', 0),
+                            content=chunk_dict.get('content', ''),
+                            document_id=chunk_dict.get('document_id', 0),
+                            standard_no=chunk_dict.get('standard_no'),
+                            clause=chunk_dict.get('clause'),
+                            score=chunk_dict.get('score', 0.0),
+                            recall_source=chunk_dict.get('recall_source', 'unknown'),
+                            document_title=chunk_dict.get('document_title')
+                        ))
+
+            logger.info(f"[User {user_id}] Generating answer with {len(chunks_for_generation)} chunks")
+
+            generation_result = await self.generator.generate(
+                query=preprocessing_output.optimized_query,
+                chunks=chunks_for_generation
+            )
+
+            logger.info(f"[User {user_id}] Answer generated in {generation_result.generation_time}ms, tokens={generation_result.token_count}")
+
+            # 格式化citations为dict
+            citations_list = [
+                {
+                    'index': c.index,
+                    'chunk_id': c.chunk_id,
+                    'standard_no': c.standard_no,
+                    'clause': c.clause,
+                    'content_snippet': c.content_snippet,
+                    'document_title': c.document_title
+                }
+                for c in generation_result.citations
+            ]
+
+            answer = generation_result.answer
+            generation_time = generation_result.generation_time
+            citations = citations_list
+
+        except Exception as e:
+            logger.error(f"[User {user_id}] Generation error: {e}", exc_info=True)
+            answer = f"抱歉，生成答案时出现错误。"
+            generation_time = 0
+            citations = []
+            generation_result = None
 
         # 当前返回模拟结果
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -192,12 +248,12 @@ class QueryService:
 
         result = {
             'status': 'success',
-            'answer': f"模拟答案：{preprocessing_output.optimized_query}",
-            'citations': [],
+            'answer': answer,
+            'citations': citations,
             'lane': route_decision.lane,
             'route_reason': route_decision.reason,
             'retrieval_time': lane_info.get('retrieval_time', 0),
-            'generation_time': 800,  # 模拟
+            'generation_time': generation_time,
             'total_time': elapsed_ms,
             'query_log_id': query_log_id,
             **lane_info  # 合并车道特定信息
