@@ -48,7 +48,7 @@ class VectorRecall:
             List[ChunkResult]: 召回的文档块
         """
         try:
-            logger.info(f"[VectorRecall] query='{query}', top_k={top_k}")
+            logger.warning(f"[VectorRecall] START query='{query}', top_k={top_k}")
 
             # 生成查询向量
             dense_vector = self.embedder.encode(query)  # 稠密向量
@@ -75,9 +75,18 @@ class VectorRecall:
             chunk_results = []
             for result_dict in results:
                 payload = result_dict['payload']
+                # chunk_id / doc_id 在 Qdrant payload 中是 UUID 字符串，需转为稳定整数
+                # 优先使用 Qdrant point id（已经是 UUID），其次用 payload 中的 chunk_id
+                point_id = result_dict.get('id')
+                chunk_id_val = self._uuid_to_int(point_id if point_id is not None
+                                                  else payload.get('chunk_id', 0))
+                doc_id_raw = payload.get('doc_id', 0)
+                doc_id_val = (int(doc_id_raw) if isinstance(doc_id_raw, int) or
+                               (isinstance(doc_id_raw, str) and doc_id_raw.isdigit())
+                               else abs(hash(str(doc_id_raw))) % (2 ** 31))
                 chunk_result = ChunkResult(
-                    chunk_id=int(payload.get('chunk_id', 0)),
-                    document_id=int(payload.get('doc_id', 0)),
+                    chunk_id=chunk_id_val,
+                    document_id=doc_id_val,
                     content=payload.get('text', ''),
                     score=result_dict['score'],
                     # 文档信息
@@ -97,12 +106,26 @@ class VectorRecall:
                 )
                 chunk_results.append(chunk_result)
 
-            logger.info(f"[VectorRecall] Found {len(chunk_results)} results")
+            logger.warning(f"[VectorRecall] DONE found={len(chunk_results)}")
             return chunk_results
 
         except Exception as e:
             logger.error(f"[VectorRecall] Error: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    def _uuid_to_int(value) -> int:
+        """将 UUID 字符串或整数转换为稳定的正整数，用于去重键"""
+        if isinstance(value, int):
+            return value
+        s = str(value)
+        if s.isdigit():
+            return int(s)
+        import uuid as _uuid
+        try:
+            return _uuid.UUID(s).int % (2 ** 31)
+        except ValueError:
+            return abs(hash(s)) % (2 ** 31)
 
     def _build_qdrant_filter(self, filters: Dict[str, Any]):
         """
@@ -205,7 +228,7 @@ class KeywordRecall:
             List[ChunkResult]: 召回的文档块
         """
         try:
-            logger.info(f"[KeywordRecall] query='{query}', top_k={top_k}")
+            logger.warning(f"[KeywordRecall] START query='{query}', top_k={top_k}")
 
             # 构建 ES 查询
             es_query = {
@@ -238,15 +261,8 @@ class KeywordRecall:
             chunk_results = []
             for hit in results:
                 source = hit.get('_source', {})
-                chunk_id = source.get('chunk_id', 0)
-
-                # 检查 chunk_id 类型
-                if isinstance(chunk_id, str):
-                    chunk_id = int(chunk_id) if chunk_id.isdigit() else 0
-
-                doc_id = source.get('doc_id', 0)
-                if isinstance(doc_id, str):
-                    doc_id = int(doc_id) if doc_id.isdigit() else 0
+                chunk_id = VectorRecall._uuid_to_int(source.get('chunk_id', 0))
+                doc_id = VectorRecall._uuid_to_int(source.get('doc_id', 0))
 
                 chunk_result = ChunkResult(
                     chunk_id=chunk_id,
@@ -264,7 +280,7 @@ class KeywordRecall:
                 )
                 chunk_results.append(chunk_result)
 
-            logger.info(f"[KeywordRecall] Found {len(chunk_results)} results")
+            logger.warning(f"[KeywordRecall] DONE found={len(chunk_results)}")
             return chunk_results
 
         except Exception as e:
@@ -332,7 +348,7 @@ class StructuredRecall:
 
         # 优先级2: 精确标准号
         if standard_no:
-            results = self._search_by_standard(standard_no, filters, top_k)
+            results = self._search_by_standard(standard_no, query, filters, top_k)
             if results:
                 logger.info(f"[StructuredRecall] Found {len(results)} results by standard")
                 return results
@@ -409,29 +425,61 @@ class StructuredRecall:
             logger.error(f"[StructuredRecall] Error in standard+clause search: {e}")
             return []
 
+    def _extract_content_keywords(self, query: str) -> List[str]:
+        """从查询中提取内容关键词（去除标准号、助词等）"""
+        # 移除标准号
+        q = re.sub(r'GB[/T\s]*\d+[-–]\d+|DL[/T\s]*\d+[-–]\d+|NB[/T\s]*\d+[-–]\d+', '', query)
+        # 移除常见助词/虚词
+        for stop in ['的', '是', '什么', '有哪些', '怎么', '如何', '请问', '请', '要求', '规定']:
+            q = q.replace(stop, ' ')
+        # 取长度≥2的词
+        keywords = [w.strip() for w in q.split() if len(w.strip()) >= 2]
+        return keywords[:5]  # 最多5个关键词
+
     def _search_by_standard(
         self,
         standard_no: str,
+        user_query: str,
         filters: Dict[str, Any],
         top_k: int
     ) -> List[ChunkResult]:
         """精确标准号查询"""
         try:
-            query = self.db.query(Chunk, Document).join(
+            # 提取查询中的关键词（如"适用范围"、"短路电流"）用于内容过滤
+            content_keywords = self._extract_content_keywords(user_query)
+
+            base_query = self.db.query(Chunk, Document).join(
                 Document, Chunk.document_id == Document.id
             ).filter(
                 Document.standard_no.like(f'{standard_no}%'),
                 Document.status == 'valid'
             )
+            base_query = self._apply_filters(base_query, filters)
 
-            query = self._apply_filters(query, filters)
-            query = query.order_by(Chunk.position_in_doc).limit(top_k)
-            results = query.all()
+            # 优先：内容含关键词的块（token + 父块）
+            if content_keywords:
+                from sqlalchemy import or_
+                kw_conditions = [Chunk.content.like(f'%{kw}%') for kw in content_keywords]
+                keyword_results = (base_query
+                                   .filter(or_(*kw_conditions),
+                                           Chunk.chunk_type == 'parent')
+                                   .order_by(Chunk.position_in_doc)
+                                   .limit(top_k)
+                                   .all())
+                if keyword_results:
+                    return [self._to_chunk_result(c, d, 0.95) for c, d in keyword_results]
 
-            return [
-                self._to_chunk_result(chunk, doc, 0.9)
-                for chunk, doc in results
-            ]
+            # 降级：按位置返回（跳过位置0-2的封面/TOC，从 position>=3 开始）
+            results = (base_query
+                       .filter(Chunk.position_in_doc >= 3,
+                               Chunk.chunk_type == 'parent')
+                       .order_by(Chunk.position_in_doc)
+                       .limit(top_k)
+                       .all())
+            if not results:
+                results = base_query.order_by(Chunk.position_in_doc).limit(top_k).all()
+
+            return [self._to_chunk_result(c, d, 0.9) for c, d in results]
 
         except Exception as e:
             logger.error(f"[StructuredRecall] Error in standard search: {e}")
@@ -568,7 +616,7 @@ class MultiPathRecall:
             List[ChunkResult]: 去重后的 Top50 文档块
         """
         start_time = time.time()
-        logger.info(f"[MultiPathRecall] query='{query}', filters={filters}")
+        logger.warning(f"[MultiPathRecall] START query='{query}', filters={filters}")
 
         # 步骤1: 三路并行召回
         vector_task = self.vector_recall.search(query, filters, top_k=20)
@@ -597,14 +645,17 @@ class MultiPathRecall:
             chunk_id_to_sources.setdefault(chunk.chunk_id, []).append("structured")
 
         for chunk in all_chunks:
-            chunk.recall_sources = chunk_id_to_sources.get(chunk.chunk_id, [])
+            sources = chunk_id_to_sources.get(chunk.chunk_id, [])
+            chunk.recall_sources = sources
+            if len(sources) > 1:
+                chunk.recall_source = "+".join(sources)
 
         # 步骤4: 返回 Top50
         final_chunks = all_chunks[:50]
 
         elapsed_ms = int((time.time() - start_time) * 1000)
-        logger.info(
-            f"[MultiPathRecall] Completed in {elapsed_ms}ms | "
+        logger.warning(
+            f"[MultiPathRecall] Done {elapsed_ms}ms | "
             f"vector={len(vector_chunks)}, keyword={len(keyword_chunks)}, "
             f"structured={len(structured_chunks)} → merged={len(all_chunks)} → top50={len(final_chunks)}"
         )
@@ -613,29 +664,29 @@ class MultiPathRecall:
 
     def _merge_deduplicate(self, chunk_lists: List[List[ChunkResult]]) -> List[ChunkResult]:
         """
-        合并去重
+        RRF 合并去重
 
         策略：
-        - 按 chunk_id 去重
-        - 保留分数最高的副本
-        - 按综合分数排序
+        - 按 chunk_id 去重，保留第一次出现的 ChunkResult 对象
+        - 用 Reciprocal Rank Fusion 计算跨源综合分数，避免 BM25 vs 余弦分数尺度不一致
+        - 被多路召回的块分数更高（"多路共识"加成）
         """
-        chunk_map = {}
+        RRF_K = 60  # 标准 RRF 参数
+
+        chunk_map: Dict[int, ChunkResult] = {}
+        rrf_scores: Dict[int, float] = {}
 
         for chunks in chunk_lists:
-            for chunk in chunks:
-                if chunk.chunk_id not in chunk_map:
-                    chunk_map[chunk.chunk_id] = chunk
-                else:
-                    # 保留分数更高的副本
-                    if chunk.score > chunk_map[chunk.chunk_id].score:
-                        chunk_map[chunk.chunk_id] = chunk
+            for rank, chunk in enumerate(chunks):
+                cid = chunk.chunk_id
+                if cid not in chunk_map:
+                    chunk_map[cid] = chunk
+                rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
 
-        # 按分数排序
-        merged_chunks = sorted(
-            chunk_map.values(),
-            key=lambda c: c.score,
-            reverse=True
-        )
+        # 将 RRF 分数写回 chunk 对象
+        # 归一化到 [0, 1]（除以最大值），使现有充分性阈值（0.6/0.5）仍然有意义
+        max_rrf = max(rrf_scores.values()) if rrf_scores else 1.0
+        for cid, chunk in chunk_map.items():
+            chunk.score = rrf_scores[cid] / max_rrf
 
-        return merged_chunks
+        return sorted(chunk_map.values(), key=lambda c: c.score, reverse=True)

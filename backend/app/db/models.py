@@ -188,6 +188,7 @@ class QueryLog(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="日志ID")
     user_id = Column(BigInteger, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, comment="用户ID")
+    conversation_id = Column(String(100), nullable=True, comment="会话ID")
 
     # 查询内容
     query = Column(Text, nullable=False, comment="原始查询")
@@ -247,6 +248,7 @@ class QueryLog(Base):
     # 索引
     __table_args__ = (
         Index('idx_user_id', 'user_id'),
+        Index('idx_conversation_id', 'conversation_id'),
         Index('idx_lane', 'lane'),
         Index('idx_recall_success', 'recall_success'),
         Index('idx_strategy', 'strategy'),

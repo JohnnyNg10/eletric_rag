@@ -220,17 +220,13 @@ class TwoStageReranker:
                 stage="coarse"
             )
 
-            # 构造结果并排序
-            results = []
-            for candidate, score in zip(candidates, scores):
-                if score >= self.coarse_threshold:
-                    results.append(self._chunk_to_rerank_result(candidate, score))
-
-            # 按分数排序并取Top K
+            # 构造结果并排序（不设硬阈值截断，避免整批候选被淘汰后回退到召回分数）
+            results = [self._chunk_to_rerank_result(c, s) for c, s in zip(candidates, scores)]
             results.sort(key=lambda x: x.score, reverse=True)
             top_results = results[:self.coarse_top_k]
 
-            logger.info(f"[CoarseRerank] {len(candidates)} → {len(results)} (threshold >= {self.coarse_threshold}) → Top{len(top_results)}")
+            best = top_results[0].score if top_results else 0.0
+            logger.info(f"[CoarseRerank] {len(candidates)} → Top{len(top_results)} (best_score={best:.3f})")
             return top_results
 
         except Exception as e:

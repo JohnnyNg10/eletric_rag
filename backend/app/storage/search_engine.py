@@ -54,6 +54,7 @@ class SearchEngine:
                     "properties": {
                         "doc_id": {"type": "keyword"},
                         "chunk_id": {"type": "keyword"},
+                        "chunk_type": {"type": "keyword"},
                         "text": {
                             "type": "text",
                             "analyzer": "electric_analyzer",
@@ -63,8 +64,11 @@ class SearchEngine:
                         },
                         "standard_no": {"type": "keyword"},
                         "clause": {"type": "keyword"},
+                        "chapter": {"type": "keyword"},
                         "category": {"type": "keyword"},
                         "voltage_level": {"type": "keyword"},
+                        "is_table": {"type": "boolean"},
+                        "table_title": {"type": "keyword"},
                         "page_number": {"type": "integer"},
                         "importance_score": {"type": "float"},
                         "created_at": {"type": "date"}

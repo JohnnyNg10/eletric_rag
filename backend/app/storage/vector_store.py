@@ -173,13 +173,14 @@ class VectorStore:
                 ).points
             else:
                 # 仅稠密向量检索
-                results = self.client.search(
+                results = self.client.query_points(
                     collection_name=self.collection_name,
-                    query_vector=("dense", dense_vector),
+                    query=dense_vector,
+                    using="dense",
                     query_filter=query_filter,
                     limit=limit,
                     with_payload=True
-                )
+                ).points
 
             # 转换为字典格式
             return [
