@@ -231,7 +231,10 @@ class QueryService:
                     clarified=is_clarified_query,
                     retrieval_time=lane_info.get('retrieval_time', 0),
                     total_time=elapsed_ms,
-                    lane_info=lane_info
+                    lane_info=lane_info,
+                    answer=answer,
+                    citations=citations if citations else None,
+                    conversation_id=conversation_id
                 )
 
                 # 如果是澄清后的查询，记录澄清日志
@@ -279,7 +282,10 @@ class QueryService:
         clarified: bool,
         retrieval_time: int,
         total_time: int,
-        lane_info: Dict[str, Any]
+        lane_info: Dict[str, Any],
+        answer: Optional[str] = None,
+        citations: Optional[list] = None,
+        conversation_id: Optional[str] = None
     ) -> int:
         """
         记录查询日志
@@ -315,6 +321,7 @@ class QueryService:
 
         query_log = QueryLog(
             user_id=user_id,
+            conversation_id=conversation_id,
             query=query,
             normalized_query=normalized_query,
             lane=lane,
@@ -327,7 +334,10 @@ class QueryService:
             retrieved_chunk_ids=retrieved_chunk_ids,
             rerank_scores=rerank_scores,
             sufficiency_result=sufficiency_result_data,
-            expanded_queries=lane_info.get('expanded_queries', [])
+            expanded_queries=lane_info.get('expanded_queries', []),
+            answer=answer,
+            citations=citations,
+            has_citations=bool(citations)
         )
 
         self.db.add(query_log)
@@ -340,7 +350,7 @@ class QueryService:
         if lane == 'fast' and sufficiency_result_data:
             if not sufficiency_result_data['sufficient'] and lane_info.get('retry_triggered', False):
                 # 二次检索后仍可能不充分，记录badcase
-                self._record_badcase_if_needed(query_log.id, sufficiency_result_data)
+                self._record_badcase_if_needed(query_log.id, sufficiency_result_data, query)
 
         return query_log.id
 
@@ -391,7 +401,8 @@ class QueryService:
     def _record_badcase_if_needed(
         self,
         query_log_id: int,
-        sufficiency_result: Dict[str, Any]
+        sufficiency_result: Dict[str, Any],
+        query: str = ""
     ):
         """
         记录坏案例（当充分性不足时）
@@ -410,6 +421,7 @@ class QueryService:
 
                 badcase = BadcaseTracking(
                     query_log_id=query_log_id,
+                    query=query,
                     root_cause='reranking',  # 重排层问题
                     root_cause_detail=root_cause_detail,
                     status='pending'

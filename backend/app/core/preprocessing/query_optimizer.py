@@ -59,6 +59,11 @@ class QueryOptimizer:
         Returns:
             OptimizationResult: 优化结果
         """
+        # 规则前置检查：含标准号或已知领域专业术语时直接判为明确查询，跳过 LLM
+        if self._is_clearly_specific(query):
+            logger.info(f"Pre-check: query contains specific indicators, skipping LLM. query='{query}'")
+            return OptimizationResult(strategy='none', vagueness_score=0.2, options=[])
+
         try:
             # 尝试使用 LLM 一体化评估和优化
             return await self._llm_optimize(query)
@@ -66,6 +71,22 @@ class QueryOptimizer:
             # LLM 失败时降级到规则方案
             logger.warning(f"LLM optimize failed, fallback to rule-based: {e}")
             return await self._rule_based_optimize(query)
+
+    def _is_clearly_specific(self, query: str) -> bool:
+        """
+        规则判断查询是否明确（含标准号/条款号/已知专业术语）。
+        满足任意一条即可跳过 LLM 笼统度评估。
+        """
+        import re
+        patterns = [
+            r'GB[/T]*[/\s]*\d+',    # GB/T 45418, GB 50XXX
+            r'DL[/T]*[/\s]*\d+',    # DL/T XXX
+            r'NB[/T]*[/\s]*\d+',    # NB/T XXX
+            r'N-\d+准则',           # N-1准则, N-2准则
+            r'\d+kV',               # 电压等级：10kV, 110kV
+            r'\d+\.\d+(?:\.\d+)*',  # 条款号：5.1.2
+        ]
+        return any(re.search(p, query) for p in patterns)
 
     async def _llm_optimize(self, query: str) -> OptimizationResult:
         """
@@ -240,24 +261,6 @@ class QueryOptimizer:
 
         return options
 
-    # ==================== 以下为兼容性方法（保留旧接口） ====================
-
-    async def assess_vagueness(self, query: str) -> float:
-        """
-        评估笼统度（兼容性方法，建议使用 optimize() 一体化接口）
-
-        Args:
-            query: 查询文本
-
-        Returns:
-            float: 笼统度评分 0-1
-        """
-        try:
-            result = await self._llm_optimize(query)
-            return result.vagueness_score
-        except Exception as e:
-            logger.warning(f"LLM vagueness assessment failed, fallback to rule-based: {e}")
-            return await self._rule_based_vagueness(query)
     # ==================== 以下为兼容性方法（保留旧接口） ====================
 
     async def assess_vagueness(self, query: str) -> float:
