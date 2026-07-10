@@ -46,7 +46,7 @@ class QueryService:
         self.preprocessor = Preprocessor()
         self.router = Router()
         self.fast_lane = FastLane(db=db)  # 传入DB会话用于召回
-        self.slow_lane = SlowLane()
+        self.slow_lane = SlowLane(db=db)  # 慢车道也需要DB会话
         self.generator = get_generator(enable_validation=False)  # 生成器（默认不开启验证以节省成本）
         self.db = db  # 数据库会话，用于日志记录
 
@@ -162,22 +162,34 @@ class QueryService:
             if route_decision.lane == "fast" and hasattr(retrieval_result, 'rerank_results'):
                 chunks_for_generation = retrieval_result.rerank_results
             else:
-                # 慢车道或没有rerank结果时，从retrieved_chunks转换
+                # 慢车道：retrieved_chunks 是 List[ChunkResult]，需转换为 RerankResult
+                from app.core.retrieval.rerank import RerankResult
                 from app.schemas.retrieval import ChunkResult
                 chunks_for_generation = []
-                for chunk_dict in retrieval_result.retrieved_chunks:
-                    if isinstance(chunk_dict, dict):
-                        # 转换dict为RerankResult格式供生成器使用
-                        from app.core.retrieval.rerank import RerankResult
+                for chunk in retrieval_result.retrieved_chunks:
+                    if isinstance(chunk, ChunkResult):
+                        # ChunkResult → RerankResult
                         chunks_for_generation.append(RerankResult(
-                            chunk_id=chunk_dict.get('chunk_id', 0),
-                            content=chunk_dict.get('content', ''),
-                            document_id=chunk_dict.get('document_id', 0),
-                            standard_no=chunk_dict.get('standard_no'),
-                            clause=chunk_dict.get('clause'),
-                            score=chunk_dict.get('score', 0.0),
-                            recall_source=chunk_dict.get('recall_source', 'unknown'),
-                            document_title=chunk_dict.get('document_title')
+                            chunk_id=chunk.chunk_id,
+                            content=chunk.content,
+                            document_id=chunk.document_id,
+                            standard_no=chunk.standard_no,
+                            clause=chunk.clause,
+                            score=chunk.score,
+                            recall_source='slow_lane',
+                            document_title=chunk.document_title
+                        ))
+                    elif isinstance(chunk, dict):
+                        # 兼容旧的 dict 格式
+                        chunks_for_generation.append(RerankResult(
+                            chunk_id=chunk.get('chunk_id', 0),
+                            content=chunk.get('content', ''),
+                            document_id=chunk.get('document_id', 0),
+                            standard_no=chunk.get('standard_no'),
+                            clause=chunk.get('clause'),
+                            score=chunk.get('score', 0.0),
+                            recall_source=chunk.get('recall_source', 'unknown'),
+                            document_title=chunk.get('document_title')
                         ))
 
             logger.info(f"[User {user_id}] Generating answer with {len(chunks_for_generation)} chunks")
@@ -297,6 +309,7 @@ class QueryService:
         rerank_scores = None
         sufficiency_result_data = None
         retrieved_chunk_ids = None
+        reasoning_steps_data = None
 
         if lane == 'fast':
             rerank_results = lane_info.get('rerank_results', [])
@@ -318,6 +331,26 @@ class QueryService:
                     'confidence': suf.confidence,
                     'gaps': suf.gaps
                 }
+        elif lane == 'slow':
+            # 慢车道：提取 reasoning_steps
+            reasoning_steps = lane_info.get('reasoning_steps', [])
+            if reasoning_steps:
+                # 转换 ToolCallRecord 为 dict
+                reasoning_steps_data = [
+                    {
+                        'step': record.step,
+                        'tool': record.tool,
+                        'params': record.params,
+                        'elapsed_ms': record.elapsed_ms,
+                        'result_count': record.result_count,
+                        'timeout': record.timeout
+                    }
+                    for record in reasoning_steps
+                ]
+
+            # 慢车道的 retrieved_chunk_ids（从 recall_count 推断，暂无具体 chunk_ids）
+            # TODO: 如果需要具体 chunk_ids，需要从 retrieval_result.retrieved_chunks 提取
+            retrieved_chunk_ids = []  # 慢车道暂不记录具体 chunk_ids
 
         query_log = QueryLog(
             user_id=user_id,
@@ -334,6 +367,7 @@ class QueryService:
             retrieved_chunk_ids=retrieved_chunk_ids,
             rerank_scores=rerank_scores,
             sufficiency_result=sufficiency_result_data,
+            reasoning_steps=reasoning_steps_data,  # 新增：慢车道推理步骤
             expanded_queries=lane_info.get('expanded_queries', []),
             answer=answer,
             citations=citations,

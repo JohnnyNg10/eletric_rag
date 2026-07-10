@@ -236,6 +236,7 @@ class QueryLog(Base):
     # 元数据
     filters_applied = Column(JSON, comment="应用的元数据过滤条件")
     expanded_queries = Column(JSON, comment="扩展的查询")
+    reasoning_steps = Column(JSON, comment="慢车道推理步骤详情（工具调用链路）")
 
     # 时间戳
     created_at = Column(TIMESTAMP, server_default=func.now(), comment="创建时间")
