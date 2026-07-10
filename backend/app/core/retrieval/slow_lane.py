@@ -70,8 +70,8 @@ class SlowLane:
     """
 
     MAX_STEPS = 3
-    STEP_TIMEOUT_MS = 2000
-    TOTAL_TIMEOUT_MS = 15000  # 增加到 15 秒，因为单次 LLM 调用需要 8-9 秒
+    STEP_TIMEOUT_MS = 5000  # 增加到 5 秒，以适应向量检索的耗时
+    TOTAL_TIMEOUT_MS = 20000  # 增加到 20 秒
     LLM_DECISION_TIMEOUT_MS = 10000  # 增加到 10 秒
 
     def __init__(self, db: Session):
@@ -234,24 +234,38 @@ class SlowLane:
         context_summary = self._build_context_summary(current_chunks)
 
         # 构建 prompt
-        system_prompt = """你是一个专业的检索助手，负责决策是否需要继续检索以及使用什么工具。
+        system_prompt = """你是一个专业的电力标准检索助手，负责决策是否需要继续检索以及使用什么工具。
 
 可用工具：
-1. retrieve_standard - 标准内容检索
+1. retrieve_standard - 标准内容语义检索（主要工具）
    参数：{"query": "检索查询", "standard_ids": ["标准号1", "标准号2"] (可选)}
-   用途：在指定标准（可选）中执行语义召回
+   用途：使用语义搜索在所有标准或指定标准中查找相关内容
+   适用场景：
+   - 用户提出技术问题，需要查找相关标准条款
+   - 需要找到特定概念、要求、指标的具体规定
+   - 比较不同标准对同一主题的规定
 
 2. retrieve_clause - 精确条款定位
    参数：{"standard_id": "标准号", "clause_number": "条款号"}
    用途：精确获取某标准某条款的完整原文
+   适用场景：
+   - 用户明确提到"某标准第X条"或"X.X.X条款"
+   - 需要补充完整条款内容
 
-3. list_related_standards - 相关标准清单
+3. list_related_standards - 相关标准清单（辅助工具）
    参数：{"keyword": "关键词", "category": "分类" (可选)}
-   用途：列出包含特定关键词的标准清单（不返回内容，仅元信息）
+   用途：仅列出包含特定关键词的标准清单（不返回实际内容）
+   适用场景：
+   - 用户问"有哪些标准涉及XX"
+   - 需要先确定相关标准范围，再用 retrieve_standard 检索内容
 
-请分析当前信息是否充分回答问题，如果需要继续检索，选择合适的工具。
+工具选择原则：
+- 优先使用 retrieve_standard 进行语义搜索（最有效）
+- 只有明确知道条款号时才用 retrieve_clause
+- 只有需要"列举标准"而非"查找内容"时才用 list_related_standards
+- list_related_standards 后通常需要跟随 retrieve_standard 获取实际内容
 
-返回 JSON 格式：
+返回 JSON 格式（不要添加其他说明文字）：
 {"action": "continue", "tool": "工具名", "params": {...}}  # 继续检索
 或
 {"action": "sufficient"}  # 信息已充分
@@ -264,7 +278,17 @@ class SlowLane:
 已获取信息：
 {context_summary}
 
-请决策下一步操作。"""
+请决策下一步操作。
+
+示例决策：
+- 如果问题是"异步发电机与变流器型光伏的功率因数要求有无区别？"
+  应选择：{{"action": "continue", "tool": "retrieve_standard", "params": {{"query": "异步发电机 变流器型光伏 功率因数"}}}}
+
+- 如果问题是"GB/T 33593-2017 第 5.3 条说了什么？"
+  应选择：{{"action": "continue", "tool": "retrieve_clause", "params": {{"standard_id": "GB/T 33593-2017", "clause_number": "5.3"}}}}
+
+- 如果问题是"有哪些标准涉及光伏并网？"
+  应选择：{{"action": "continue", "tool": "list_related_standards", "params": {{"keyword": "光伏并网"}}}}"""
 
         messages = [
             {"role": "system", "content": system_prompt},
