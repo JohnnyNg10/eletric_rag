@@ -8,7 +8,6 @@ from app.storage.object_store import object_store
 import tempfile
 from pathlib import Path
 
-
 def test_minio_connection():
     """测试 MinIO 连接"""
     print("Testing MinIO connection...")
@@ -74,7 +73,6 @@ With multiple sections.
         print(f"\n[FAIL] Test failed: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     test_minio_connection()

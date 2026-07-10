@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # LLM API (Volcengine Ark)
     ARK_API_KEY: str = "your_api_key"
     LLM_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
-    LLM_MODEL: str = "ep-20260707175105-z8r85"
+    LLM_MODEL: str = "ep-20260709155619-6cv8s"
     LLM_MAX_TOKENS: int = 4096
     LLM_TEMPERATURE: float = 0.7
 

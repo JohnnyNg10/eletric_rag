@@ -6,7 +6,10 @@
 2. 生成Qdrant Payload过滤条件
 """
 import re
+import logging
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class MetadataExtractor:
@@ -34,10 +37,11 @@ class MetadataExtractor:
         """
         filters = {}
 
-        # 1. 提取电压等级
-        voltage_level = self._extract_voltage_level(query)
-        if voltage_level:
-            filters['voltage_level'] = voltage_level
+        logger.warning(f"[MetadataExtractor] extract called, query='{query[:50]}'")
+
+        # 注意：voltage_level 过滤已禁用
+        # 原因：当前所有入库文档的 voltage_level 字段均为 NULL，
+        # 用该字段过滤会导致零召回。待入库流程补充该字段后再启用。
 
         # 2. 提取标准号
         standard_no = self._extract_standard_no(query)
@@ -50,6 +54,35 @@ class MetadataExtractor:
             filters['category'] = category
 
         return filters
+
+    def _is_compatibility_question(self, query: str) -> bool:
+        """
+        判断是否为兼容性/适用性问题
+
+        这类问题通常是询问某个电压等级是否适用于某标准，
+        不应该用电压等级作为过滤条件（会漏掉答案）
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            bool: 是否为兼容性问题
+        """
+        compatibility_patterns = [
+            r'能否.*参照',
+            r'是否.*适用',
+            r'可以.*参照',
+            r'适用.*吗',
+            r'适用.*哪些',
+            r'包含.*哪些',
+            r'.*适用范围',
+        ]
+
+        for pattern in compatibility_patterns:
+            if re.search(pattern, query):
+                return True
+
+        return False
 
     def _extract_voltage_level(self, query: str) -> Optional[str]:
         """

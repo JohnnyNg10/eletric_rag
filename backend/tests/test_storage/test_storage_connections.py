@@ -5,11 +5,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 from app.core.retrieval.recall import VectorRecall, KeywordRecall, StructuredRecall
 from app.db.session import SessionLocal
-
 
 async def test_vector_recall():
     """测试Qdrant向量召回"""
@@ -42,7 +39,6 @@ async def test_vector_recall():
         traceback.print_exc()
         return False
 
-
 async def test_keyword_recall():
     """测试Elasticsearch关键词召回"""
     print("\n" + "="*60)
@@ -73,7 +69,6 @@ async def test_keyword_recall():
         import traceback
         traceback.print_exc()
         return False
-
 
 async def test_structured_recall():
     """测试MySQL结构化召回"""
@@ -109,7 +104,6 @@ async def test_structured_recall():
         db.close()
         return False
 
-
 async def main():
     """主测试函数"""
     print("\n" + "="*60)
@@ -143,7 +137,6 @@ async def main():
     else:
         print("\n[WARNING] Some storage connections failed")
         return 1
-
 
 if __name__ == "__main__":
     exit_code = asyncio.run(main())

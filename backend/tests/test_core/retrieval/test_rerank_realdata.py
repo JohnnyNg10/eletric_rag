@@ -6,8 +6,6 @@ import sys
 import logging
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 # 关闭SQLAlchemy日志
 logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
@@ -16,7 +14,6 @@ from app.db.models import Chunk, Document
 from app.schemas.retrieval import ChunkResult
 from app.core.retrieval.rerank import TwoStageReranker
 from app.core.retrieval.sufficiency import SufficiencyChecker
-
 
 async def main():
     db = SessionLocal()
@@ -112,7 +109,6 @@ async def main():
 
     finally:
         db.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

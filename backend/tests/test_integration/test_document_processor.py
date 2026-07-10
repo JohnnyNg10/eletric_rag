@@ -2,7 +2,6 @@
 测试文档处理流程
 """
 import sys
-import io
 sys.path.append('.')
 
 from app.core.document_processor.parser import pdf_parser
@@ -12,8 +11,6 @@ from app.core.document_processor.classifier import document_classifier
 from pathlib import Path
 
 # 设置 UTF-8 输出
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-
 
 def test_document_processing():
     """测试文档处理流程"""
@@ -125,7 +122,6 @@ def test_document_processing():
         traceback.print_exc()
 
     print("\n[PASS] Document processing test completed!")
-
 
 if __name__ == "__main__":
     test_document_processing()

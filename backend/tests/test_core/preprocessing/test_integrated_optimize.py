@@ -11,10 +11,8 @@ import sys
 from pathlib import Path
 
 # 添加项目根目录到 Python 路径
-sys.path.insert(0, str(Path(__file__).parent))
 
 from app.core.preprocessing.query_optimizer import QueryOptimizer
-
 
 async def test_integrated_optimize():
     """测试一体化优化功能"""
@@ -94,7 +92,6 @@ async def test_integrated_optimize():
     print("测试完成")
     print("=" * 80)
 
-
 async def test_performance():
     """测试性能：对比一体化 vs 分离调用"""
 
@@ -138,7 +135,6 @@ async def test_performance():
 
     print("=" * 80)
 
-
 async def main():
     """主函数"""
     try:
@@ -152,7 +148,6 @@ async def main():
         print(f"\n错误: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

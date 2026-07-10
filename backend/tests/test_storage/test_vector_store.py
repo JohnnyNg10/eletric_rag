@@ -7,7 +7,6 @@ sys.path.append('.')
 from app.storage.vector_store import vector_store
 import asyncio
 
-
 def test_qdrant_connection():
     """测试 Qdrant 连接"""
     print("Testing Qdrant connection...")
@@ -72,7 +71,6 @@ def test_qdrant_connection():
         print(f"\n[FAIL] Test failed: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     test_qdrant_connection()

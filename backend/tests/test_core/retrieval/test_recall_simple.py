@@ -5,12 +5,8 @@ import asyncio
 import sys
 import io
 
-sys.path.append('D:/dl/backend')
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-
 from app.core.retrieval.recall import MultiPathRecall
 from app.db.session import SessionLocal
-
 
 async def test_simple_recall():
     """测试基本召回功能"""
@@ -65,7 +61,6 @@ async def test_simple_recall():
     print("\n" + "=" * 80)
     print("测试完成")
     print("=" * 80)
-
 
 if __name__ == "__main__":
     asyncio.run(test_simple_recall())

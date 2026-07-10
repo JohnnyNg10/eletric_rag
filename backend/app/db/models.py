@@ -97,7 +97,7 @@ class Chunk(Base):
 
     # 内容
     content = Column(Text, nullable=False, comment="文本内容")
-    content_hash = Column(String(64), nullable=False, unique=True, comment="内容哈希")
+    content_hash = Column(String(64), nullable=False, index=True, comment="内容哈希(允许跨文档重复)")
     chunk_type = Column(
         Enum('parent', 'child', name='chunk_type_enum'),
         nullable=False,

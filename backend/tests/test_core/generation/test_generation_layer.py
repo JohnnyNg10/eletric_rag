@@ -10,15 +10,12 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 from app.core.generation import (
     AnswerGenerator,
     CitationExtractor,
     FactualValidator
 )
 from app.core.retrieval.rerank import RerankResult
-
 
 async def test_citation_extractor():
     """测试引用提取"""
@@ -71,7 +68,6 @@ async def test_citation_extractor():
     assert len(citations) == 2
     print("\n[PASS] CitationExtractor test passed")
     return True
-
 
 async def test_answer_generator():
     """测试答案生成器"""
@@ -130,7 +126,6 @@ async def test_answer_generator():
     print("\n[PASS] AnswerGenerator test passed")
     return True
 
-
 async def test_empty_chunks():
     """测试空chunks的降级处理"""
     print("\n" + "="*50)
@@ -148,7 +143,6 @@ async def test_empty_chunks():
     assert "未找到相关参考资料" in result.answer
     print("\n[PASS] Empty chunks handling passed")
     return True
-
 
 async def main():
     """主测试函数"""
@@ -181,7 +175,6 @@ async def main():
     else:
         print(f"\n[FAILED] {total - passed} test(s) failed")
         return 1
-
 
 if __name__ == "__main__":
     exit_code = asyncio.run(main())

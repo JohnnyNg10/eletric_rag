@@ -11,12 +11,10 @@ import sys
 from pathlib import Path
 
 # 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent))
 
 from app.core.retrieval.rerank import TwoStageReranker, RerankResult
 from app.core.retrieval.sufficiency import SufficiencyChecker, SufficiencyResult
 from app.schemas.retrieval import ChunkResult
-
 
 async def test_two_stage_reranker():
     """测试两阶段重排器"""
@@ -74,7 +72,6 @@ async def test_two_stage_reranker():
         import traceback
         traceback.print_exc()
         return False
-
 
 async def test_sufficiency_checker():
     """测试充分性检查器"""
@@ -148,7 +145,6 @@ async def test_sufficiency_checker():
     print("\n[PASS] Sufficiency checker test passed")
     return True
 
-
 async def test_degradation():
     """测试降级策略"""
     print("\n" + "="*60)
@@ -196,7 +192,6 @@ async def test_degradation():
         traceback.print_exc()
         return False
 
-
 async def main():
     """主测试函数"""
     print("\n" + "="*60)
@@ -228,7 +223,6 @@ async def main():
     else:
         print(f"\n[FAILED] {total - passed} test(s) failed")
         return 1
-
 
 if __name__ == "__main__":
     exit_code = asyncio.run(main())

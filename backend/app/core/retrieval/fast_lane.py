@@ -12,6 +12,7 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import logging
+import re
 import time
 
 # 从 preprocessing 导入组件（这些组件逻辑上属于快车道）
@@ -105,11 +106,15 @@ class FastLane:
         recalled_chunks = await self._multi_path_recall(expanded_queries, filters)
         logger.info(f"[FastLane] Recalled {len(recalled_chunks)} chunks")
 
+        # 步骤2.5: 去重（精确内容去重，避免重复标题占据精排名额）
+        deduped_chunks = self._deduplicate_candidates(recalled_chunks)
+        logger.info(f"[FastLane] After dedup: {len(deduped_chunks)} chunks ({len(recalled_chunks) - len(deduped_chunks)} removed)")
+
         # 步骤3: 两阶段重排
         reranked_results = await self.reranker.rerank(
             query=query,
-            candidates=recalled_chunks,
-            top_k=5
+            candidates=deduped_chunks,
+            top_k=8
         )
         logger.info(f"[FastLane] Reranked to Top{len(reranked_results)}")
 
@@ -138,11 +143,14 @@ class FastLane:
             # 合并去重（保留原Top5 + 补充召回）
             merged_chunks = self._merge_deduplicate(recalled_chunks, retry_chunks)
 
-            # 重新精排（Top8，比正常多3个）
+            # 内容去重（同首次召回一样）
+            merged_chunks = self._deduplicate_candidates(merged_chunks)
+
+            # 重新精排（Top10，比正常多2个）
             reranked_results = await self.reranker.rerank(
                 query=query,
                 candidates=merged_chunks,
-                top_k=8
+                top_k=10
             )
             logger.info(f"[FastLane] Retry reranked to Top{len(reranked_results)}")
 
@@ -296,6 +304,50 @@ class FastLane:
         # 按分数排序
         merged = sorted(chunk_map.values(), key=lambda c: c.score, reverse=True)
         return merged
+
+    # 目录页的典型特征：多行"标题文字 + 页码数字"
+    _TOC_LINE_RE = re.compile(r'[一-鿿\w]{2,}\s+\d{1,3}\s*$', re.MULTILINE)
+
+    def _deduplicate_candidates(self, chunks: List[ChunkResult]) -> List[ChunkResult]:
+        """
+        精排前过滤 + 去重，防止纯标题/目录页占据精排名额。
+
+        策略：
+        1. 过滤纯标题块（正文内容 < 20字符，无参考价值）
+        2. 过滤目录页（含 ≥3 行"文字+页码"结构）
+        3. 精确内容去重（保留召回分最高的版本）
+        4. 子集去重：若某块内容是另一块的真子串，丢弃较短的（冗余标题）
+        """
+
+        # 先按召回分排序，保证保留高分版本
+        sorted_chunks = sorted(chunks, key=lambda c: c.score, reverse=True)
+
+        seen_normalized: dict[str, bool] = {}
+        kept: List[ChunkResult] = []
+
+        for chunk in sorted_chunks:
+            normalized = " ".join(chunk.content.strip().split())
+
+            # 过滤纯标题块（太短，只有章节号+标题，没有实质内容）
+            if len(normalized) < 20:
+                logger.debug(f"[Dedup] Drop short chunk id={chunk.chunk_id}: {normalized!r}")
+                continue
+
+            # 过滤目录页（≥3 行以"文字+空格+页码"结尾）
+            toc_matches = self._TOC_LINE_RE.findall(chunk.content)
+            if len(toc_matches) >= 3:
+                logger.debug(f"[Dedup] Drop TOC chunk id={chunk.chunk_id} ({len(toc_matches)} toc lines)")
+                continue
+
+            # 精确内容去重（只去掉完全相同的内容，保留高分版本）
+            if normalized in seen_normalized:
+                continue
+
+            seen_normalized[normalized] = True
+            kept.append(chunk)
+
+        logger.info(f"[Dedup] {len(chunks)} → {len(kept)} (filtered {len(chunks)-len(kept)})")
+        return kept
 
     def _rerank_result_to_dict(self, result: RerankResult) -> Dict[str, Any]:
         """将RerankResult转换为dict"""

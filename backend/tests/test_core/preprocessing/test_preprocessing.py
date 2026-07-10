@@ -16,10 +16,8 @@
 import asyncio
 import sys
 import io
-sys.path.append('D:/dl/backend')
 
 # 强制UTF-8输出，避免Windows GBK编码错误
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from app.core.preprocessing import (
     Preprocessor,
@@ -30,7 +28,6 @@ from app.core.preprocessing import (
 # 直接从文件导入（用于单元测试）
 from app.core.preprocessing.query_rewriter import QueryRewriter
 from app.core.preprocessing.metadata_extractor import MetadataExtractor
-
 
 async def test_term_normalizer():
     """测试术语标准化"""
@@ -52,7 +49,6 @@ async def test_term_normalizer():
         print(f"原始: {query}")
         print(f"标准化: {normalized}")
         print()
-
 
 async def test_query_optimizer():
     """测试查询优化器"""
@@ -78,7 +74,6 @@ async def test_query_optimizer():
         print(f"选项数: {len(result.options)}")
         print()
 
-
 async def test_query_rewriter():
     """测试查询改写"""
     print("=" * 60)
@@ -100,7 +95,6 @@ async def test_query_rewriter():
         for i, eq in enumerate(expanded, 1):
             print(f"  {i}. {eq}")
         print()
-
 
 async def test_metadata_extractor():
     """测试元数据提取"""
@@ -125,7 +119,6 @@ async def test_metadata_extractor():
         print(f"过滤条件: {filters}")
         print(f"完整元数据: {metadata}")
         print()
-
 
 async def test_full_pipeline():
     """测试完整预处理流程"""
@@ -180,7 +173,6 @@ async def test_full_pipeline():
     print("      在完整流程中，它们由 QueryService → Router → FastLane 调用")
     print()
 
-
 async def test_edge_cases():
     """测试边界情况"""
     print("=" * 60)
@@ -219,7 +211,6 @@ async def test_edge_cases():
             print(f"[ERROR] 未预期错误: {e}")
         print()
 
-
 async def main():
     """运行所有测试"""
     print("\n" + "=" * 60)
@@ -236,7 +227,6 @@ async def main():
     print("\n" + "=" * 60)
     print("测试完成")
     print("=" * 60 + "\n")
-
 
 if __name__ == "__main__":
     asyncio.run(main())

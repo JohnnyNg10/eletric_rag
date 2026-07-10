@@ -18,10 +18,7 @@ import sys
 import io
 from typing import Dict, Any
 
-sys.path.append('D:/dl/backend')
-
 # 强制UTF-8输出，避免Windows GBK编码错误
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from app.core.retrieval.recall import (
     VectorRecall,
@@ -34,13 +31,11 @@ from app.storage.vector_store import vector_store
 from app.storage.search_engine import search_engine
 from app.db.session import SessionLocal
 
-
 def print_section(title: str):
     """打印分隔标题"""
     print("\n" + "=" * 80)
     print(f"  {title}")
     print("=" * 80)
-
 
 def print_results(results: list, title: str):
     """打印召回结果"""
@@ -60,7 +55,6 @@ def print_results(results: list, title: str):
 
     if len(results) > 5:
         print(f"\n... 还有 {len(results) - 5} 条结果未显示")
-
 
 async def test_vector_recall():
     """测试向量召回"""
@@ -104,7 +98,6 @@ async def test_vector_recall():
         traceback.print_exc()
         return False
 
-
 async def test_keyword_recall():
     """测试关键词召回"""
     print_section("测试 2: 关键词召回 (Elasticsearch BM25)")
@@ -146,7 +139,6 @@ async def test_keyword_recall():
         import traceback
         traceback.print_exc()
         return False
-
 
 async def test_structured_recall():
     """测试结构化召回"""
@@ -196,7 +188,6 @@ async def test_structured_recall():
         import traceback
         traceback.print_exc()
         return False
-
 
 async def test_multipath_recall():
     """测试多路融合召回"""
@@ -260,7 +251,6 @@ async def test_multipath_recall():
         traceback.print_exc()
         return False
 
-
 async def main():
     """主测试函数"""
     print("\n" + "=" * 80)
@@ -290,7 +280,6 @@ async def main():
     total = len(results)
     passed = sum(1 for _, success in results if success)
     print(f"\n总计: {passed}/{total} 测试通过")
-
 
 if __name__ == "__main__":
     asyncio.run(main())

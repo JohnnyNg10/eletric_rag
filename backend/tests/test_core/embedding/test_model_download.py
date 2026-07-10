@@ -15,7 +15,6 @@ sys.path.insert(0, str(backend_dir))
 from app.core.embedding.model_loader import get_download_manager
 from app.config import settings
 
-
 def test_check_models():
     """测试检查模型是否存在"""
     print("=" * 60)
@@ -39,7 +38,6 @@ def test_check_models():
 
     print()
     return results
-
 
 def test_download_single_model():
     """测试下载单个模型"""
@@ -77,7 +75,6 @@ def test_download_single_model():
     except Exception as e:
         print(f"\n✗ Download failed: {e}")
         return False
-
 
 def test_download_all_models():
     """测试下载所有模型"""
@@ -119,7 +116,6 @@ def test_download_all_models():
     except Exception as e:
         print(f"\n✗ Download failed: {e}")
         return False
-
 
 def main():
     """主测试函数"""
@@ -164,7 +160,6 @@ def main():
     print("\n" + "=" * 60)
     print("Test completed")
     print("=" * 60)
-
 
 if __name__ == "__main__":
     main()

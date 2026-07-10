@@ -11,14 +11,12 @@ import sys
 from pathlib import Path
 
 # 添加项目根目录到 Python 路径
-sys.path.insert(0, str(Path(__file__).parent))
 
 from app.core.preprocessing import Preprocessor, PreprocessingInput
 from app.core.retrieval import Router
 from app.services.query_service import QueryService
 from app.db.session import SessionLocal
 from app.db.models import QueryLog, ClarificationLog
-
 
 async def test_clarification_flow():
     """测试完整的澄清流程"""
@@ -141,7 +139,6 @@ async def test_clarification_flow():
     print("测试完成")
     print("=" * 80)
 
-
 async def test_clear_query():
     """测试明确查询（不触发澄清）"""
 
@@ -182,7 +179,6 @@ async def test_clear_query():
 
     print("=" * 80)
 
-
 async def main():
     """主函数"""
     try:
@@ -198,7 +194,6 @@ async def main():
         print(f"\n错误: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

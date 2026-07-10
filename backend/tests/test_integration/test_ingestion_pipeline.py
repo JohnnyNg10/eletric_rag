@@ -2,13 +2,10 @@
 测试文档入库流水线
 """
 import sys
-import io
 sys.path.append('.')
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from app.core.ingestion_pipeline import ingestion_pipeline
 from pathlib import Path
-
 
 def test_single_document_ingestion():
     """测试单个文档入库"""
@@ -47,7 +44,6 @@ def test_single_document_ingestion():
         print(f"Message: {result['message']}")
 
     print("\n[PASS] Test completed!")
-
 
 def test_batch_ingestion():
     """测试批量入库（前3个文件）"""
@@ -102,7 +98,6 @@ def test_batch_ingestion():
             print(f"Error: {detail.get('error')}")
 
     print("\n[PASS] Batch test completed!")
-
 
 if __name__ == "__main__":
     import argparse
