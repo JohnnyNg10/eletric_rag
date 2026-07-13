@@ -58,7 +58,8 @@ class QueryService:
         filters: Optional[Dict[str, Any]] = None,
         refined_query: Optional[str] = None,
         selected_option_id: Optional[int] = None,
-        clarification_context: Optional[Dict[str, Any]] = None
+        clarification_context: Optional[Dict[str, Any]] = None,
+        user_lane: Optional[str] = None  # [阶段B] 用户选择的车道（覆盖系统建议）
     ) -> Dict[str, Any]:
         """
         执行完整的查询流程
@@ -115,7 +116,24 @@ class QueryService:
                 }
 
         # 步骤2: 路由决策
-        route_decision = self.router.route(preprocessing_output.optimized_query)
+        # [阶段B] 如果用户提供了 user_lane，则覆盖系统路由
+        if user_lane:
+            logger.info(f"[User {user_id}] User overriding route: {user_lane}")
+            from app.core.retrieval import RouteDecision
+            route_decision = RouteDecision(
+                lane=user_lane,
+                reason=f"用户选择：{user_lane}车道",
+                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3} if user_lane == "fast" else {"max_steps": 3, "step_timeout": 2000, "total_timeout": 7000}
+            )
+            predicted_lane = preprocessing_output.lane_suggestion if hasattr(preprocessing_output, 'lane_suggestion') else "fast"
+            lane_confidence = preprocessing_output.lane_confidence if hasattr(preprocessing_output, 'lane_confidence') else 0.7
+        else:
+            # 使用 Router 路由（当前为关键词规则，未来可能替换为微调模型）
+            route_decision = self.router.route(preprocessing_output.optimized_query)
+            # [阶段B] 记录预测车道（来自 LLM 建议或 Router）
+            predicted_lane = preprocessing_output.lane_suggestion if hasattr(preprocessing_output, 'lane_suggestion') else route_decision.lane
+            lane_confidence = preprocessing_output.lane_confidence if hasattr(preprocessing_output, 'lane_confidence') else 0.7
+
         logger.info(f"[User {user_id}] Route decision: {route_decision.lane} - {route_decision.reason}")
 
         # 步骤3: 检索（根据路由结果选择车道）
@@ -239,6 +257,9 @@ class QueryService:
                     query=query,
                     normalized_query=preprocessing_output.optimized_query,
                     lane=route_decision.lane,
+                    predicted_lane=predicted_lane,  # [阶段B]
+                    lane_confidence=lane_confidence,  # [阶段B]
+                    user_lane=user_lane,  # [阶段B]
                     vagueness_score=preprocessing_output.vagueness_score if not is_clarified_query else None,
                     clarified=is_clarified_query,
                     retrieval_time=lane_info.get('retrieval_time', 0),
@@ -297,7 +318,10 @@ class QueryService:
         lane_info: Dict[str, Any],
         answer: Optional[str] = None,
         citations: Optional[list] = None,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[str] = None,
+        predicted_lane: Optional[str] = None,  # [阶段B] LLM预测车道
+        lane_confidence: Optional[float] = None,  # [阶段B] 路由置信度
+        user_lane: Optional[str] = None  # [阶段B] 用户选择的车道
     ) -> int:
         """
         记录查询日志
@@ -358,6 +382,9 @@ class QueryService:
             query=query,
             normalized_query=normalized_query,
             lane=lane,
+            predicted_lane=predicted_lane or lane,  # [阶段B] 默认等于最终车道
+            lane_confidence=lane_confidence,  # [阶段B]
+            user_lane=user_lane,  # [阶段B]
             vagueness_score=vagueness_score,
             clarified=clarified,
             retrieval_time=retrieval_time,

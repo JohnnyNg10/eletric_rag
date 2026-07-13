@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户外充电桩试验项目",
+      "refined_query": "10kV户外公共充电桩电气设备的试验项目有哪些？"
+    },
+    {
+      "label": "380V户内充电机试验项目",
+      "refined_query": "380V户内充换电站充电机的电气试验项目要求？"
+    },
+    {
+      "label": "高压储能设备试验项目",
+      "refined_query": "充换电站高压储能设备的电气试验项目清单？"
+    }
+  ],
+  "lane_suggestion": "slow",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含枚举关键词\"有哪些\"，需要检索充换电设施相关的多个标准并整理试验项目，需多跳推理"
+}

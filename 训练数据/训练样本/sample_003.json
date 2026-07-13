@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内配电变压器温升规范",
+      "refined_query": "10kV户内配电变压器的温升指标规范要求是什么？"
+    },
+    {
+      "label": "35kV户外电力变压器温升规范",
+      "refined_query": "35kV户外电力变压器的温升指标规范有哪些？"
+    },
+    {
+      "label": "110kV变电站变压器温升规范",
+      "refined_query": "110kV变电站用变压器的温升指标规范是什么？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（变压器），缺少电压等级等维度，但无需跨标准对比，单路检索可满足"
+}

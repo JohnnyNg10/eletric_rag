@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "application_scene",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内断路器绝缘试验",
+      "refined_query": "10kV户内真空断路器的绝缘试验判定标准要求"
+    },
+    {
+      "label": "35kV户外断路器绝缘试验",
+      "refined_query": "35kV户外SF6断路器绝缘试验判定标准"
+    },
+    {
+      "label": "110kV变电站断路器绝缘试验",
+      "refined_query": "110kV变电站断路器绝缘试验判定标准规定"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（断路器），缺少电压等级、应用场景等维度，但无需跨标准对比，单路检索可满足"
+}

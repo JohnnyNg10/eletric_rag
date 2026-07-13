@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type"
+  ],
+  "options": [
+    {
+      "label": "10kV真空断路器温升试验",
+      "refined_query": "10kV真空断路器的温升试验操作步骤及规范要求"
+    },
+    {
+      "label": "35kV户外断路器温升试验",
+      "refined_query": "35kV户外断路器温升试验的具体操作步骤"
+    },
+    {
+      "label": "110kV SF6断路器温升试验",
+      "refined_query": "110kV SF6断路器温升试验操作步骤标准"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（断路器），缺少电压等级和设备类型，但无需跨标准对比，单路检索可满足"
+}

@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内电流互感器选型规范",
+      "refined_query": "10kV户内电流互感器选型需参考哪些国家标准规范？"
+    },
+    {
+      "label": "35kV户外电压互感器选型规范",
+      "refined_query": "35kV户外电压互感器选型应参考哪些行业规范？"
+    },
+    {
+      "label": "110kV变电站互感器选型规范",
+      "refined_query": "110kV变电站互感器选型需参考哪些技术规范？"
+    }
+  ],
+  "lane_suggestion": "slow",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含枚举关键词'哪些规范'，需要检索多个相关标准并整理，涉及多标准关联查询"
+}

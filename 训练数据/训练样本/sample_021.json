@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "application_scene",
+    "equipment_type"
+  ],
+  "options": [
+    {
+      "label": "10kV工业断路器选型",
+      "refined_query": "10kV工业场景下断路器选型是否需兼顾谐波工况？"
+    },
+    {
+      "label": "低压民用断路器选型",
+      "refined_query": "低压民用配电系统断路器选型是否要考虑谐波工况？"
+    },
+    {
+      "label": "35kV变电站断路器选型",
+      "refined_query": "35kV变电站断路器选型是否需兼顾谐波工况影响？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询针对断路器选型是否需兼顾谐波工况，属于单一设备的特定要求查询，无需跨标准对比，单路检索可满足"
+}

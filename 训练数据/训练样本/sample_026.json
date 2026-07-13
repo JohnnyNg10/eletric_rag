@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "install_env",
+    "capacity_range"
+  ],
+  "options": [
+    {
+      "label": "10kV户内干式变压器",
+      "refined_query": "10kV户内干式变压器的绝缘电阻等绝缘参数有哪些？"
+    },
+    {
+      "label": "35kV户外干式变压器",
+      "refined_query": "35kV户外干式变压器的绝缘参数及测试要求是什么？"
+    },
+    {
+      "label": "110kV大容量干式变压器",
+      "refined_query": "110kV大容量干式变压器绝缘参数标准有哪些？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（干式变压器），缺少电压等级、安装环境等维度，但无需跨标准对比，单路检索可满足"
+}

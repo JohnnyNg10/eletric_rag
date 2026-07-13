@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内开关柜绝缘设计",
+      "refined_query": "10kV户内开关柜的绝缘设计要求及标准规范"
+    },
+    {
+      "label": "35kV户外开关柜绝缘设计",
+      "refined_query": "35kV户外开关柜的绝缘设计技术要求"
+    },
+    {
+      "label": "110kV变电站开关柜绝缘设计",
+      "refined_query": "110kV变电站开关柜的绝缘设计标准要求"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（开关柜），缺少电压等级和安装环境，但无需跨标准对比，单路检索可满足"
+}

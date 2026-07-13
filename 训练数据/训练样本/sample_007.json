@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "install_env",
+    "application_scene"
+  ],
+  "options": [
+    {
+      "label": "10kV户内配电电缆选型",
+      "refined_query": "10kV户内配电系统中电缆选型如何匹配负荷容量？"
+    },
+    {
+      "label": "35kV户外直埋电缆选型",
+      "refined_query": "35kV户外直埋电缆选型如何匹配负荷容量？"
+    },
+    {
+      "label": "110kV输电电缆选型",
+      "refined_query": "110kV输电系统中电缆选型如何匹配负荷容量？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及电缆选型匹配负荷容量，缺少电压等级、安装环境等维度，但无需跨标准对比，单路检索可满足"
+}

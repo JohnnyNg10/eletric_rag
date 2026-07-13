@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV地下电力电缆处理",
+      "refined_query": "10kV地下电力电缆温升超标时的故障排查及处理方法"
+    },
+    {
+      "label": "35kV架空电力电缆处理",
+      "refined_query": "35kV架空电力电缆温升超标后的处理措施及预防方法"
+    },
+    {
+      "label": "低压户内控制电缆处理",
+      "refined_query": "低压户内控制电缆温升超标时的应急处理及原因分析"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.8,
+  "lane_reason": "查询缺少电压等级、设备类型等多个关键维度，但无对比或多跳推理需求，补全后可单路检索相关标准内容"
+}

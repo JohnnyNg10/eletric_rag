@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene"
+  ],
+  "options": [
+    {
+      "label": "10kV户内高压断路器选型",
+      "refined_query": "10kV户内高压断路器选型需要满足的技术要求"
+    },
+    {
+      "label": "35kV户外高压断路器选型",
+      "refined_query": "35kV户外高压断路器选型的技术要求有哪些"
+    },
+    {
+      "label": "低压户内断路器选型",
+      "refined_query": "低压户内断路器选型需满足的技术参数要求"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及断路器选型，但缺少电压等级、设备类型等维度，无需跨标准对比，单路检索可满足"
+}

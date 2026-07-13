@@ -1,0 +1,28 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "neutral_grounding",
+    "capacity_range",
+    "install_env",
+    "standard_series",
+    "protection_type"
+  ],
+  "options": [
+    {
+      "label": "户内630A断路器试验",
+      "refined_query": "35kV户内630A充换电站断路器绝缘试验项目及合格标准"
+    },
+    {
+      "label": "户外1250A断路器试验",
+      "refined_query": "35kV户外1250A充换电站断路器绝缘试验及合格标准"
+    },
+    {
+      "label": "DL标准断路器试验",
+      "refined_query": "35kV充换电站用DL系列断路器绝缘试验项目及标准"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确的电压等级（35kV）、设备类型（断路器）及应用场景（充换电站），无需跨标准对比，单路检索可满足"
+}

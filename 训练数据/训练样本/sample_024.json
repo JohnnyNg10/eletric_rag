@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "equipment_type",
+    "voltage_level",
+    "application_scene"
+  ],
+  "options": [
+    {
+      "label": "10kV配电电流互感器选型",
+      "refined_query": "10kV配电场景下电流互感器选型是否受负荷容量影响"
+    },
+    {
+      "label": "35kV输电电压互感器选型",
+      "refined_query": "35kV输电场景电压互感器选型与负荷容量的关系"
+    },
+    {
+      "label": "110kV变电站电流互感器选型",
+      "refined_query": "110kV变电站电流互感器选型是否受负荷容量影响"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及互感器选型，但缺少设备类型、电压等级及应用场景，无需跨标准对比，单路检索可满足"
+}

@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内断路器绝缘选择",
+      "refined_query": "10kV户内断路器的绝缘等级选择标准和方法是什么？"
+    },
+    {
+      "label": "35kV户外断路器绝缘选择",
+      "refined_query": "35kV户外断路器绝缘等级如何选择？"
+    },
+    {
+      "label": "低压户内断路器绝缘选择",
+      "refined_query": "低压户内断路器绝缘等级的选择依据是什么？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及单一设备类型（断路器），虽缺失多个维度，但补全后可通过单标准检索满足需求"
+}

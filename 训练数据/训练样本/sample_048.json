@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "equipment_type",
+    "voltage_level"
+  ],
+  "options": [
+    {
+      "label": "380V充电桩温升把控",
+      "refined_query": "380V充换电站充电桩的温升指标控制要求及方法"
+    },
+    {
+      "label": "10kV变压器温升把控",
+      "refined_query": "充换电站10kV变压器的温升指标把控标准及措施"
+    },
+    {
+      "label": "低压配电柜温升把控",
+      "refined_query": "充换电站低压配电柜的温升指标控制规范及检测方法"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及充换电站场景，但缺少设备类型和电压等级，无需跨标准对比，单路检索可满足"
+}

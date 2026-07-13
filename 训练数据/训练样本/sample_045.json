@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "neutral_grounding",
+    "capacity_range",
+    "protection_type"
+  ],
+  "options": [
+    {
+      "label": "10kV直接接地PT参数",
+      "refined_query": "10kV电缆分支箱直接接地电压互感器绝缘试验及选型参数"
+    },
+    {
+      "label": "10kV消弧线圈接地PT参数",
+      "refined_query": "10kV电缆分支箱消弧线圈接地PT绝缘试验选型参数"
+    },
+    {
+      "label": "10kV测量用PT参数",
+      "refined_query": "10kV电缆分支箱测量用电压互感器绝缘试验选型参数"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型、电压等级和应用场景，无需跨标准对比或多跳推理，单路检索可满足"
+}

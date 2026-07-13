@@ -198,9 +198,22 @@ class QueryLog(Base):
     lane = Column(
         Enum('fast', 'slow', name='lane_enum'),
         nullable=False,
-        comment="路由车道"
+        comment="路由车道（最终执行的车道）"
     )
     complexity_score = Column(Float, comment="复杂度评分")
+
+    # [阶段B] 路由三字段关系：predicted_lane（LLM预测） → user_lane（用户覆盖） → lane（最终）
+    predicted_lane = Column(
+        Enum('fast', 'slow', name='lane_enum'),
+        nullable=False,
+        comment="预测车道（LLM建议）"
+    )
+    lane_confidence = Column(Float, comment="路由置信度 0-1")
+    user_lane = Column(
+        Enum('fast', 'slow', name='lane_enum'),
+        nullable=True,
+        comment="用户选择的车道（用户覆盖时记录）"
+    )
 
     # 召回信息
     recall_success = Column(Boolean, comment="是否召回成功")

@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "application_scene",
+    "capacity_range"
+  ],
+  "options": [
+    {
+      "label": "10kV工业电缆选型",
+      "refined_query": "10kV工业场景下电缆选型需核算电压损失吗？"
+    },
+    {
+      "label": "35kV民用电缆选型",
+      "refined_query": "35kV民用建筑电缆选型需核算电压损失吗？"
+    },
+    {
+      "label": "低压大容量电缆选型",
+      "refined_query": "低压大容量设备电缆选型需核算电压损失吗？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.8,
+  "lane_reason": "查询涉及电缆选型，但缺少电压等级、应用场景等维度，无需跨标准对比，单路检索可满足"
+}

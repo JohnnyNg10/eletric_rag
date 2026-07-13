@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "application_scene",
+    "install_env",
+    "equipment_type"
+  ],
+  "options": [
+    {
+      "label": "10kV户内开关柜选型参数",
+      "refined_query": "10kV户内中置开关柜选型需核对的技术参数有哪些？"
+    },
+    {
+      "label": "35kV户外开关柜选型参数",
+      "refined_query": "35kV户外环网开关柜选型需核对的关键参数？"
+    },
+    {
+      "label": "110kV变电站开关柜选型",
+      "refined_query": "110kV变电站开关柜选型需核对的参数要求？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及开关柜选型参数，缺少电压等级等维度，但无需跨标准对比，单路检索可满足"
+}

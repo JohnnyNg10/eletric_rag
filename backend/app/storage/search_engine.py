@@ -322,6 +322,70 @@ class SearchEngine:
             logger.error(f"Search failed: {e}", exc_info=True)
             return []
 
+    def aggregate_by_standard(self, query_text: str = "", top_n: int = 10) -> List[Dict[str, Any]]:
+        """
+        按 standard_no 前缀聚合，返回各标准系列的文档数量。
+        用于 KB 填充澄清选项的 standard_series 维度。
+
+        Args:
+            query_text: 可选的查询文本，非空时只统计与查询相关的标准
+            top_n: 返回前 N 个标准系列
+
+        Returns:
+            List of {"standard_no": "GB 50053", "doc_count": 23, "series": "GB"}
+        """
+        try:
+            query_clause: Dict[str, Any]
+            if query_text:
+                query_clause = {
+                    "multi_match": {
+                        "query": query_text,
+                        "fields": ["text^2", "standard_no^3"],
+                        "type": "best_fields"
+                    }
+                }
+            else:
+                query_clause = {"match_all": {}}
+
+            body = {
+                "size": 0,
+                "query": query_clause,
+                "aggs": {
+                    "by_standard": {
+                        "terms": {
+                            "field": "standard_no",
+                            "size": top_n,
+                            "min_doc_count": 1,
+                            "order": {"_count": "desc"}
+                        }
+                    }
+                }
+            }
+            response = self.client.search(index=self.index_name, body=body)
+            buckets = response.get("aggregations", {}).get("by_standard", {}).get("buckets", [])
+
+            results = []
+            for bucket in buckets:
+                standard_no = bucket["key"]
+                if not standard_no:
+                    continue
+                # 提取标准系列前缀（GB / DL / NB / 其他）
+                series = "其他"
+                for prefix in ("GB", "DL", "NB"):
+                    if standard_no.upper().startswith(prefix):
+                        series = prefix
+                        break
+                results.append({
+                    "standard_no": standard_no,
+                    "doc_count": bucket["doc_count"],
+                    "series": series,
+                })
+            return results
+
+        except Exception as e:
+            logger.error(f"aggregate_by_standard failed: {e}", exc_info=True)
+            return []
+
     def get_index_stats(self) -> Dict[str, Any]:
         """获取索引统计信息"""
         try:

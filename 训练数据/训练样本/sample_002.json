@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内电力电缆检测",
+      "refined_query": "10kV户内电力电缆绝缘性能的检测试验方法和要求"
+    },
+    {
+      "label": "35kV户外电力电缆检测",
+      "refined_query": "35kV户外电力电缆绝缘性能检测试验步骤及标准"
+    },
+    {
+      "label": "低压控制电缆检测",
+      "refined_query": "低压控制电缆绝缘性能检测试验的具体规范"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及电缆绝缘性能检测，但缺少电压等级、设备类型等维度，补全后可单路检索满足需求"
+}

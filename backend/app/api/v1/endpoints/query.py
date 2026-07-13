@@ -3,6 +3,7 @@
 
 POST   /api/v1/query                       执行查询（主接口）
 POST   /api/v1/query/optimize              提问优化（笼统度评估 + 澄清选项）
+POST   /api/v1/query/preprocess            [阶段B] 预处理（笼统度+澄清+路由建议）
 POST   /api/v1/query/{query_log_id}/feedback  提交用户反馈
 GET    /api/v1/query/history               查询历史（分页）
 """
@@ -23,8 +24,10 @@ from app.schemas.query import (
     QueryHistoryItem,
     QueryHistoryResponse,
 )
+from app.schemas.preprocessing import PreprocessResponse  # [阶段B]
 from app.services.query_service import QueryService
 from app.core.preprocessing.query_optimizer import QueryOptimizer
+from app.core.preprocessing import Preprocessor, PreprocessingInput  # [阶段B]
 from app.api.deps import get_current_user
 from app.db.models import User, QueryLog
 from app.db.session import get_db
@@ -61,7 +64,8 @@ async def execute_query(
             filters=request.filters,
             refined_query=request.refined_query,
             selected_option_id=request.selected_option_id,
-            clarification_context=request.clarification_context
+            clarification_context=request.clarification_context,
+            user_lane=request.user_lane  # [阶段B] 传递用户选择的车道
         )
 
         # 需要澄清：200 + status=need_clarification
@@ -149,6 +153,10 @@ async def optimize_query(
             strategy=result.strategy,
             vagueness_score=result.vagueness_score,
             options=options,
+            lane_suggestion=result.lane_suggestion,  # [阶段B]
+            lane_confidence=result.lane_confidence,  # [阶段B]
+            lane_reason=result.lane_reason,  # [阶段B]
+            missing_dimension_keys=result.missing_dimension_keys  # [阶段B]
         )
 
     except Exception as e:
@@ -156,6 +164,71 @@ async def optimize_query(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"优化失败: {str(e)}"
+        )
+
+
+@router.post("/preprocess", response_model=PreprocessResponse, summary="[阶段B] 预处理（一体化）")
+async def preprocess_query(
+    request: OptimizeQueryRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    [阶段B] 预处理接口：术语标准化 + 笼统度评估 + 澄清选项 + 路由建议。
+
+    不执行检索，仅返回预处理结果。
+    前端可用此接口获取系统建议（路由、澄清选项），用户确认后再调用 POST /query。
+
+    与 /optimize 的区别：
+    - /optimize：仅优化器，不包含术语标准化
+    - /preprocess：完整预处理流程（标准化 + 优化）
+    """
+    try:
+        import time
+        start_time = time.time()
+
+        logger.info(f"[User {current_user.id}] Preprocess query: {request.query!r}")
+
+        preprocessor = Preprocessor()
+        preprocessing_input = PreprocessingInput(
+            query=request.query,
+            user_context={'user_id': current_user.id},
+            enable_optimization=True
+        )
+        preprocessing_output = await preprocessor.preprocess(preprocessing_input)
+
+        # 提取优化结果（如果有的话）
+        options = []
+        if preprocessing_output.clarification_options:
+            options = [
+                OptimizationOption(
+                    id=opt.id if hasattr(opt, 'id') else i + 1,
+                    label=opt.label if hasattr(opt, 'label') else opt.get('label', ''),
+                    refined_query=opt.refined_query if hasattr(opt, 'refined_query') else opt.get('refined_query', ''),
+                    standard_preview=opt.standard_preview if hasattr(opt, 'standard_preview') else opt.get('standard_preview'),
+                    doc_count=opt.doc_count if hasattr(opt, 'doc_count') else opt.get('doc_count', 0),
+                )
+                for i, opt in enumerate(preprocessing_output.clarification_options)
+            ]
+
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
+        return PreprocessResponse(
+            normalized_query=preprocessing_output.optimized_query,
+            vagueness_score=preprocessing_output.vagueness_score or 0.0,
+            strategy=preprocessing_output.strategy or "none",
+            options=options,
+            missing_dimension_keys=preprocessing_output.missing_dimension_keys if hasattr(preprocessing_output, 'missing_dimension_keys') else [],
+            lane_suggestion=preprocessing_output.lane_suggestion if hasattr(preprocessing_output, 'lane_suggestion') else "fast",
+            lane_confidence=preprocessing_output.lane_confidence if hasattr(preprocessing_output, 'lane_confidence') else 0.7,
+            lane_reason=preprocessing_output.lane_reason if hasattr(preprocessing_output, 'lane_reason') else "",
+            preprocessing_time=elapsed_ms
+        )
+
+    except Exception as e:
+        logger.error(f"[User {current_user.id}] Preprocess failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"预处理失败: {str(e)}"
         )
 
 

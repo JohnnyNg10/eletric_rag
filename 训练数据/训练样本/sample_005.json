@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内中置柜试验项目",
+      "refined_query": "10kV户内中置式开关柜的常规试验项目包含哪些内容？"
+    },
+    {
+      "label": "35kV户外环网柜试验项目",
+      "refined_query": "35kV户外环网开关柜的试验项目及要求有哪些？"
+    },
+    {
+      "label": "110kV户内开关柜试验项目",
+      "refined_query": "110kV户内高压开关柜的试验项目包含哪些内容？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（开关柜），缺少电压等级、设备类型细分及安装环境，但无需跨标准对比，单路检索可满足"
+}

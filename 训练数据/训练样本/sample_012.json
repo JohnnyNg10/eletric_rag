@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内电流互感器",
+      "refined_query": "10kV户内电流互感器的温升合格标准是多少？"
+    },
+    {
+      "label": "35kV户外电压互感器",
+      "refined_query": "35kV户外电压互感器的温升合格标准要求是什么？"
+    },
+    {
+      "label": "110kV变电站互感器",
+      "refined_query": "110kV变电站互感器的温升合格标准规定是多少？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询缺少电压等级、设备类型等维度，但补全后无需跨标准对比，单路检索可满足"
+}

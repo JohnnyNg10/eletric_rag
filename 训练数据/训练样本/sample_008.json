@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type"
+  ],
+  "options": [
+    {
+      "label": "10kV配电变压器绝缘试验",
+      "refined_query": "10kV配电变压器的绝缘试验步骤和要求是什么？"
+    },
+    {
+      "label": "35kV电力变压器绝缘试验",
+      "refined_query": "35kV电力变压器的绝缘试验怎么做？"
+    },
+    {
+      "label": "110kV户外变压器绝缘试验",
+      "refined_query": "110kV户外变压器的绝缘试验方法和标准？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（变压器），缺少电压等级和设备类型等维度，但无需跨标准对比，单路检索可满足"
+}

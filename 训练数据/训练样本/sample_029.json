@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内中置柜绝缘判定",
+      "refined_query": "10kV户内中置柜绝缘试验合格判定的标准依据"
+    },
+    {
+      "label": "35kV户外环网柜绝缘判定",
+      "refined_query": "35kV户外环网柜绝缘试验合格判定依据"
+    },
+    {
+      "label": "110kV户内开关柜绝缘判定",
+      "refined_query": "110kV户内开关柜绝缘试验合格判定标准要求"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.8,
+  "lane_reason": "查询包含设备类型（开关柜），缺少电压等级、设备细分类型及安装环境，明确后可单路检索满足需求"
+}

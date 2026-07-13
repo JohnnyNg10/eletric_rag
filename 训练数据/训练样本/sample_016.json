@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内隔离开关",
+      "refined_query": "10kV户内隔离开关的温升检测方法及标准要求"
+    },
+    {
+      "label": "35kV户外隔离开关",
+      "refined_query": "35kV户外隔离开关温升检测的具体步骤和规范"
+    },
+    {
+      "label": "110kV变电站隔离开关",
+      "refined_query": "110kV变电站隔离开关温升检测方法及注意事项"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（隔离开关），缺少电压等级、设备类型等维度，但无需跨标准对比，单路检索可满足"
+}

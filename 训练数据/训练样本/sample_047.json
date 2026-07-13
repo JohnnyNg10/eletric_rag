@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene"
+  ],
+  "options": [
+    {
+      "label": "10kV配电变压器绝缘试验",
+      "refined_query": "10kV配电变压器接入电网时的绝缘相关试验要求是什么？"
+    },
+    {
+      "label": "35kV开关柜绝缘试验",
+      "refined_query": "35kV开关柜接入电网的绝缘试验项目及要求是什么？"
+    },
+    {
+      "label": "110kV户外设备绝缘试验",
+      "refined_query": "110kV户外电网接入设备的绝缘相关试验要求是什么？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.8,
+  "lane_reason": "查询未涉及对比或多跳推理，明确缺失维度后可通过单路检索满足需求"
+}

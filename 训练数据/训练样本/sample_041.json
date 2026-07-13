@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "capacity_range",
+    "install_env",
+    "neutral_grounding",
+    "standard_series"
+  ],
+  "options": [
+    {
+      "label": "110kV户外隔离开关选型",
+      "refined_query": "110kV户外T接线路隔离开关绝缘参数选型及试验流程"
+    },
+    {
+      "label": "110kV户内隔离开关选型",
+      "refined_query": "110kV户内T接线路隔离开关绝缘参数选型及试验流程"
+    },
+    {
+      "label": "110kV中性点接地隔离开关",
+      "refined_query": "110kV中性点接地T接线路隔离开关选型试验流程"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.88,
+  "lane_reason": "查询包含明确电压等级（110kV）和设备类型（隔离开关），虽缺少部分维度，但无需跨标准对比，单路检索可满足"
+}

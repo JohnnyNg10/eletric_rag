@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "capacity_range",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10MVA户外主变压器标准",
+      "refined_query": "35kV双回路充换电站10MVA户外主变压器绝缘试验及温升限值标准是什么？"
+    },
+    {
+      "label": "20MVA户内主变压器标准",
+      "refined_query": "35kV双回路充换电站20MVA户内主变压器绝缘试验及温升限值标准是什么？"
+    },
+    {
+      "label": "15MVA户外主变压器标准",
+      "refined_query": "35kV双回路充换电站15MVA户外主变压器绝缘试验及温升限值标准是什么？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确的电压等级（35kV）、设备类型（主变压器）和应用场景（双回路充换电站），缺少容量范围和安装环境，但无需跨标准对比，单路检索可满足"
+}

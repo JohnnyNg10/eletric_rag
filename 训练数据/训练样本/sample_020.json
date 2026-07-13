@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type"
+  ],
+  "options": [
+    {
+      "label": "10kV配电变压器试验项目",
+      "refined_query": "10kV配电变压器的必做试验项目有哪些？"
+    },
+    {
+      "label": "35kV电力变压器试验项目",
+      "refined_query": "35kV电力变压器的必做试验项目规定？"
+    },
+    {
+      "label": "110kV变电站变压器试验",
+      "refined_query": "110kV变电站变压器的必做试验项目清单？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（变压器），缺少电压等级和设备类型细分，但无需跨标准对比，单路检索可满足"
+}

@@ -1,0 +1,20 @@
+{
+  "vagueness_score": 0.4,
+  "strategy": "suggest",
+  "missing_dimension_keys": [
+    "voltage_level"
+  ],
+  "options": [
+    {
+      "label": "10kV开关柜选型",
+      "refined_query": "10kV开关柜选型时是否需要考虑同时系数？"
+    },
+    {
+      "label": "35kV开关柜选型",
+      "refined_query": "35kV开关柜选型是否需考虑同时系数的要求？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（开关柜），缺少电压等级，但无需跨标准对比，单路检索可满足"
+}

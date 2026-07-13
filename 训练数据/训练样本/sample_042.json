@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.85,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "neutral_grounding",
+    "install_env",
+    "standard_series",
+    "protection_type"
+  ],
+  "options": [
+    {
+      "label": "10kV户内接地电缆选型",
+      "refined_query": "10kV户内接地充换电站电缆绝缘选型及温升计算方法"
+    },
+    {
+      "label": "10kV户外不接地电缆选型",
+      "refined_query": "10kV户外不接地充换电站电缆绝缘选型与温升校核"
+    },
+    {
+      "label": "DL/T标准电缆选型计算",
+      "refined_query": "DL/T标准下10kV充换电站电缆选型及温升计算方法"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.9,
+  "lane_reason": "查询包含明确设备类型（电缆）、电压等级、容量及应用场景，虽缺失部分维度，但无需跨标准对比，单路检索可满足"
+}

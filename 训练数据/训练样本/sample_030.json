@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "equipment_type",
+    "application_scene",
+    "install_env"
+  ],
+  "options": [
+    {
+      "label": "10kV户内电流互感器",
+      "refined_query": "10kV户内电流互感器温升异常的常见原因及处理方法"
+    },
+    {
+      "label": "35kV户外电压互感器",
+      "refined_query": "35kV户外电压互感器温升异常的原因分析及解决措施"
+    },
+    {
+      "label": "110kV变电站互感器",
+      "refined_query": "110kV变电站互感器温升异常的可能原因及排查步骤"
+    }
+  ],
+  "lane_suggestion": "slow",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及互感器温升异常的原因分析，需结合设备类型、电压等级等多维度信息进行多因素推理，需慢车道处理"
+}

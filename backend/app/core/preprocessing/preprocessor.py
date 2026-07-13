@@ -35,6 +35,17 @@ class PreprocessingOutput:
     optimized_query: str
     clarification_options: Optional[list] = None
     vagueness_score: float = 0.0
+    strategy: Optional[str] = None  # none/suggest/clarify_optional/clarify_required
+
+    # [阶段B] 路由建议字段（从 QueryOptimizer 传递）
+    lane_suggestion: str = "fast"
+    lane_confidence: float = 0.7
+    lane_reason: str = ""
+    missing_dimension_keys: list = None  # type: ignore[assignment]  # __post_init__ 保证不为 None
+
+    def __post_init__(self):
+        if self.missing_dimension_keys is None:
+            self.missing_dimension_keys = []
 
 
 class Preprocessor:
@@ -90,11 +101,17 @@ class Preprocessor:
                             'label': opt.label,
                             'refined_query': opt.refined_query,
                             'standard_preview': opt.standard_preview,
-                            'doc_count': opt.doc_count
+                            'doc_count': opt.doc_count,
+                            'kb_verified': opt.kb_verified,
                         }
                         for opt in optimization_result.options
                     ],
-                    vagueness_score=optimization_result.vagueness_score
+                    vagueness_score=optimization_result.vagueness_score,
+                    strategy=optimization_result.strategy,  # [阶段B]
+                    lane_suggestion=optimization_result.lane_suggestion,  # [阶段B]
+                    lane_confidence=optimization_result.lane_confidence,  # [阶段B]
+                    lane_reason=optimization_result.lane_reason,  # [阶段B]
+                    missing_dimension_keys=optimization_result.missing_dimension_keys  # [阶段B]
                 )
         else:
             optimization_result = None
@@ -104,6 +121,11 @@ class Preprocessor:
             status='ready',
             optimized_query=normalized_query,
             clarification_options=None,
-            vagueness_score=optimization_result.vagueness_score if optimization_result else 0.0
+            vagueness_score=optimization_result.vagueness_score if optimization_result else 0.0,
+            strategy=optimization_result.strategy if optimization_result else 'none',  # [阶段B]
+            lane_suggestion=optimization_result.lane_suggestion if optimization_result else 'fast',  # [阶段B]
+            lane_confidence=optimization_result.lane_confidence if optimization_result else 0.7,  # [阶段B]
+            lane_reason=optimization_result.lane_reason if optimization_result else '',  # [阶段B]
+            missing_dimension_keys=optimization_result.missing_dimension_keys if optimization_result else []  # [阶段B]
         )
 

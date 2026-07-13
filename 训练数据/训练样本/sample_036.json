@@ -1,0 +1,28 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "neutral_grounding",
+    "capacity_range",
+    "install_env",
+    "standard_series",
+    "protection_type"
+  ],
+  "options": [
+    {
+      "label": "1000kVA户内干式变压器",
+      "refined_query": "10kV充换电站1000kVA户内干式变压器的温升绝缘参数要求"
+    },
+    {
+      "label": "2000kVA户外干式变压器",
+      "refined_query": "10kV充换电站2000kVA户外干式变压器的温升绝缘参数要求"
+    },
+    {
+      "label": "GB/T10228标准干式变压器",
+      "refined_query": "10kV充换电站GB/T10228干式变压器的温升绝缘参数要求"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确设备类型（干式变压器）和应用场景（充换电站），缺少部分维度，但无需跨标准对比，单路检索可满足"
+}

@@ -17,6 +17,9 @@ class QueryRequest(BaseModel):
     selected_option_id: Optional[int] = Field(default=None, description="用户选择的澄清选项ID")
     clarification_context: Optional[Dict[str, Any]] = Field(default=None, description="澄清上下文（包含原始query、vagueness_score等）")
 
+    # [阶段B] 路由覆盖字段
+    user_lane: Optional[str] = Field(default=None, description="用户选择的车道（覆盖系统建议）")
+
     @field_validator('query')
     @classmethod
     def validate_query(cls, v: str) -> str:
@@ -32,6 +35,13 @@ class QueryRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
+        return v
+
+    @field_validator('user_lane')
+    @classmethod
+    def validate_user_lane(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ('fast', 'slow'):
+            raise ValueError("user_lane 必须是 'fast' 或 'slow'")
         return v
 
 
@@ -52,6 +62,7 @@ class OptimizationOption(BaseModel):
     refined_query: str = Field(..., description="优化后的查询")
     standard_preview: Optional[str] = Field(default=None, description="相关标准预览")
     doc_count: int = Field(default=0, description="相关文档数量")
+    kb_verified: bool = Field(default=False, description="True 表示 standard_preview/doc_count 来自 ES 真实聚合")
 
 
 class QueryResponse(BaseModel):
@@ -71,6 +82,11 @@ class QueryResponse(BaseModel):
     vagueness_score: Optional[float] = Field(default=None, description="笼统度评分（0-1）")
     clarification_options: Optional[List[OptimizationOption]] = Field(default=None, description="澄清选项列表")
 
+    # [阶段B] 路由建议字段（后确认模式：系统建议，用户可替换）
+    lane_suggestion: Optional[str] = Field(default=None, description="系统建议的车道（fast/slow）")
+    lane_confidence: Optional[float] = Field(default=None, description="路由置信度（0-1）")
+    lane_reason: Optional[str] = Field(default=None, description="路由理由（给用户看）")
+
 
 class OptimizeQueryRequest(BaseModel):
     """提问优化请求"""
@@ -82,6 +98,12 @@ class OptimizeQueryResponse(BaseModel):
     strategy: str = Field(..., description="策略：none/suggest/clarify_optional/clarify_required")
     vagueness_score: float = Field(..., ge=0, le=1, description="笼统度评分（0-1）")
     options: List[OptimizationOption] = Field(default_factory=list, description="澄清/补全选项")
+
+    # [阶段B] 路由建议字段（与 QueryResponse 保持一致）
+    lane_suggestion: str = Field(default="fast", description="系统建议的车道（fast/slow）")
+    lane_confidence: float = Field(default=0.7, ge=0, le=1, description="路由置信度（0-1）")
+    lane_reason: str = Field(default="", description="路由理由（给用户看）")
+    missing_dimension_keys: List[str] = Field(default_factory=list, description="缺失维度的枚举键列表")
 
 
 class FeedbackRequest(BaseModel):

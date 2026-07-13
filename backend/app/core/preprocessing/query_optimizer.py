@@ -5,12 +5,30 @@
 1. 评估查询笼统度（使用 LLM，规则作为降级方案）
 2. 生成澄清选项（当前为模板，后续接入知识库动态生成）
 3. 决策优化策略
+4. [阶段B] 同时输出路由建议（lane_suggestion/lane_confidence/lane_reason）
 """
 from typing import List, Dict, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
+
+# 电力专业澄清维度枚举表（阶段B：将缺失维度从自由文本改为枚举键）
+POWER_CLARIFICATION_DIMS: Dict[str, str] = {
+    "voltage_level":      "电压等级",       # 6/10/35/110/220/500kV
+    "equipment_type":     "设备类型",       # 变压器/开关柜/GIS/电缆/互感器
+    "application_scene":  "应用场景",       # 新建/改造/运维/验收/检修
+    "neutral_grounding":  "中性点接地方式", # 直接/消弧线圈/不接地/低电阻
+    "capacity_range":     "容量范围",       # <1MVA / 1-10MVA / >10MVA
+    "install_env":        "安装环境",       # 户内/户外/地下/高海拔
+    "standard_series":    "标准系列",       # GB/DL/NB/企标
+    "protection_type":    "保护类型",       # 差动/距离/过流/零序
+}
+
+# 维度键列表，供 LLM prompt 使用
+_DIM_KEYS_STR = ", ".join(
+    f"{k}({v})" for k, v in POWER_CLARIFICATION_DIMS.items()
+)
 
 
 @dataclass
@@ -21,6 +39,7 @@ class OptimizationOption:
     refined_query: str
     standard_preview: Optional[str] = None
     doc_count: int = 0
+    kb_verified: bool = False  # True 表示 standard_preview/doc_count 来自 ES 真实聚合
 
 
 @dataclass
@@ -29,6 +48,12 @@ class OptimizationResult:
     strategy: str  # none/suggest/clarify_optional/clarify_required
     vagueness_score: float  # 0-1
     options: List[OptimizationOption]
+
+    # [阶段B] 路由建议字段（LLM 一体化输出，与 Router.route() 互补）
+    lane_suggestion: str = "fast"          # fast/slow（LLM 建议）
+    lane_confidence: float = 0.7           # 路由置信度 0-1
+    lane_reason: str = ""                  # 路由理由（可读，展示给用户）
+    missing_dimension_keys: List[str] = field(default_factory=list)  # 枚举键列表
 
 
 class QueryOptimizer:
@@ -49,6 +74,14 @@ class QueryOptimizer:
             r'\d+(?:米|m|毫米|mm)',  # 具体数值
         ]
 
+    # 慢车道触发关键词：包含这些词时即使满足 specific 规则也不短路
+    _SLOW_LANE_KEYWORDS = (
+        "区别", "差异", "对比", "比较", "不同",
+        "同时满足", "哪些标准", "哪些规范",
+        "引用了", "涉及哪些", "分别对应",
+        "关联", "交叉",
+    )
+
     async def optimize(self, query: str) -> OptimizationResult:
         """
         优化查询（一体化实现：在一次 LLM 调用中完成评估和优化）
@@ -59,18 +92,63 @@ class QueryOptimizer:
         Returns:
             OptimizationResult: 优化结果
         """
-        # 规则前置检查：含标准号或已知领域专业术语时直接判为明确查询，跳过 LLM
-        if self._is_clearly_specific(query):
-            logger.info(f"Pre-check: query contains specific indicators, skipping LLM. query='{query}'")
+        # 规则前置检查：含标准号等特征时跳过 LLM，但含慢车道关键词时不短路
+        # （避免"10kV和35kV配电装置的区别"被误判为明确单路查询）
+        has_slow_keywords = any(kw in query for kw in self._SLOW_LANE_KEYWORDS)
+        if self._is_clearly_specific(query) and not has_slow_keywords:
+            logger.info(f"Pre-check: specific query, no slow-lane keywords, skipping LLM. query='{query}'")
             return OptimizationResult(strategy='none', vagueness_score=0.2, options=[])
 
         try:
             # 尝试使用 LLM 一体化评估和优化
-            return await self._llm_optimize(query)
+            result = await self._llm_optimize(query)
         except Exception as e:
             # LLM 失败时降级到规则方案
             logger.warning(f"LLM optimize failed, fallback to rule-based: {e}")
             return await self._rule_based_optimize(query)
+
+        # KB 聚合填充：对 standard_series 维度，用 ES 真实数据替换 LLM 生成的选项
+        if "standard_series" in result.missing_dimension_keys and result.options:
+            result = await self._fill_standard_series_options(query, result)
+
+        return result
+
+    async def _fill_standard_series_options(
+        self, query: str, result: OptimizationResult
+    ) -> OptimizationResult:
+        """
+        用 ES 聚合结果填充 standard_series 维度的澄清选项。
+        每个标准系列（GB/DL/NB）生成一个选项，doc_count 来自真实统计。
+        填充成功则替换 LLM 生成的选项；ES 失败则保留 LLM 生成结果。
+        """
+        from app.storage.search_engine import search_engine
+        try:
+            buckets = search_engine.aggregate_by_standard(query_text=query, top_n=5)
+            if not buckets:
+                return result
+
+            kb_options = []
+            for i, bucket in enumerate(buckets, 1):
+                sno = bucket["standard_no"]
+                series = bucket["series"]
+                count = bucket["doc_count"]
+                label = f"{series}系列标准（{sno} 等）"
+                refined = f"{query}（依据{sno}等{series}系列标准）"
+                kb_options.append(OptimizationOption(
+                    id=i,
+                    label=label,
+                    refined_query=refined,
+                    standard_preview=sno,
+                    doc_count=count,
+                    kb_verified=True,
+                ))
+            result.options = kb_options
+            logger.info(
+                f"KB fill standard_series: replaced options with {len(kb_options)} ES buckets"
+            )
+        except Exception as e:
+            logger.warning(f"KB fill standard_series failed, keeping LLM options: {e}")
+        return result
 
     def _is_clearly_specific(self, query: str) -> bool:
         """
@@ -90,19 +168,21 @@ class QueryOptimizer:
 
     async def _llm_optimize(self, query: str) -> OptimizationResult:
         """
-        使用 LLM 一体化评估和优化（一次调用完成评估+澄清选项生成）
+        使用 LLM 一体化评估和优化（一次调用完成评估+澄清选项生成+路由建议）
+
+        [阶段B] 扩展：同时输出 lane_suggestion、lane_confidence、lane_reason
 
         Args:
             query: 查询文本
 
         Returns:
-            OptimizationResult: 优化结果
+            OptimizationResult: 优化结果（含路由建议）
         """
         from app.core.generation import llm_client
         import json
 
         prompt = f"""
-你是电力标准知识库助手。分析以下查询的明确程度并生成澄清选项。
+你是电力标准知识库助手。分析以下查询的明确程度，生成澄清选项，并给出路由建议。
 
 查询：{query}
 
@@ -113,17 +193,23 @@ class QueryOptimizer:
    - 0.6-0.8：中度笼统（缺少多个关键维度）
    - 0.8-1.0：严重笼统（缺少所有关键信息）
 
-2. 识别缺失维度（电压等级、应用场景、设备类型、参数类别等）
+2. 识别缺失维度（从以下枚举中选择）：{_DIM_KEYS_STR}
+   返回英文键列表，如 ["voltage_level", "equipment_type"]
 
 3. 生成3个澄清选项（仅当笼统度>0.5时）
    - 每个选项补充一个不同的缺失维度
    - label：展示给用户的简短标题，5-12个字，点明核心区分维度
    - refined_query：实际用于检索的完整句子，须包含原始查询的主题 + 补充的具体维度信息，15-30个字
 
+4. 路由建议（fast或slow）：
+   - fast：明确标准号/条款号，或单一维度查询
+   - slow：对比/差异/多跳推理/涉及多个标准的关联查询
+   返回 lane_suggestion（fast/slow）、lane_confidence（0-1）、lane_reason（一句话理由）
+
 返回JSON格式：
 {{
   "vagueness_score": 0.X,
-  "missing_dimensions": ["维度1", "维度2"],
+  "missing_dimension_keys": ["voltage_level", "equipment_type"],
   "reason": "缺失维度说明",
   "options": [
     {{
@@ -131,31 +217,41 @@ class QueryOptimizer:
       "refined_query": "10kV户内隔离开关额定电流、额定电压及开断能力等技术参数要求"
     }},
     ...
-  ]
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "包含明确电压等级和设备类型，单一维度查询"
 }}
 
 注意：
 - 如果笼统度<=0.5，options 返回空数组 []
-- label 是给用户看的选项标题，要简洁
-- refined_query 是送入检索引擎的查询，要完整，和 label 内容不同
+- missing_dimension_keys 必须是枚举键列表，不是中文描述
+- lane_suggestion 必须是 "fast" 或 "slow"
+- lane_confidence 是路由置信度（0-1），lane_reason 是给用户看的理由
 """
 
         response = llm_client.chat([
-            {"role": "system", "content": "你是电力标准知识库助手，专注查询优化。回答必须是有效JSON。"},
+            {"role": "system", "content": "你是电力标准知识库助手，专注查询优化和路由建议。回答必须是有效JSON。"},
             {"role": "user", "content": prompt}
-        ], temperature=0.3, max_tokens=800)
+        ], temperature=0.3, max_tokens=1000)
 
         # 解析 JSON
         result = json.loads(response.strip())
         vagueness_score = float(result.get("vagueness_score", 0.5))
-        missing_dimensions = result.get("missing_dimensions", [])
+        missing_dimension_keys = result.get("missing_dimension_keys", [])
         reason = result.get("reason", "")
         raw_options = result.get("options", [])
+
+        # [阶段B] 提取路由建议
+        lane_suggestion = result.get("lane_suggestion", "fast")
+        lane_confidence = float(result.get("lane_confidence", 0.7))
+        lane_reason = result.get("lane_reason", "常规查询")
 
         # 日志记录
         logger.info(
             f"LLM optimize: query='{query}', score={vagueness_score:.2f}, "
-            f"missing={missing_dimensions}, options_count={len(raw_options)}"
+            f"missing_dims={missing_dimension_keys}, options_count={len(raw_options)}, "
+            f"lane={lane_suggestion}, confidence={lane_confidence:.2f}"
         )
 
         # 决策策略
@@ -183,7 +279,11 @@ class QueryOptimizer:
         return OptimizationResult(
             strategy=strategy,
             vagueness_score=vagueness_score,
-            options=options
+            options=options,
+            lane_suggestion=lane_suggestion,
+            lane_confidence=lane_confidence,
+            lane_reason=lane_reason,
+            missing_dimension_keys=missing_dimension_keys
         )
 
     async def _rule_based_optimize(self, query: str) -> OptimizationResult:

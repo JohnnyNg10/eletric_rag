@@ -1,0 +1,26 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "capacity_range",
+    "install_env",
+    "neutral_grounding"
+  ],
+  "options": [
+    {
+      "label": "10kV户内环网柜CT选型",
+      "refined_query": "10kV户内环网柜场景电流互感器技术参数选型及绝缘试验要求"
+    },
+    {
+      "label": "10kV户外环网柜CT试验",
+      "refined_query": "10kV户外环网柜电流互感器容量选型与绝缘试验标准要求"
+    },
+    {
+      "label": "中性点接地CT参数要求",
+      "refined_query": "10kV中性点直接接地环网柜电流互感器技术参数选型"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含明确电压等级、设备类型和应用场景，缺少部分维度但无需跨标准对比，单路检索可满足"
+}

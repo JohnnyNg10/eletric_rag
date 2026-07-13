@@ -1,0 +1,27 @@
+{
+  "vagueness_score": 0.9,
+  "strategy": "clarify_required",
+  "missing_dimension_keys": [
+    "voltage_level",
+    "application_scene",
+    "install_env",
+    "standard_series"
+  ],
+  "options": [
+    {
+      "label": "10kV户内电缆绝缘选型",
+      "refined_query": "10kV户内电缆绝缘选型的标准依据和环境要求是什么？"
+    },
+    {
+      "label": "35kV户外电缆绝缘选型",
+      "refined_query": "35kV户外电缆绝缘选型的依据及标准系列有哪些？"
+    },
+    {
+      "label": "110kV地下电缆绝缘选型",
+      "refined_query": "110kV地下电缆绝缘选型的环境与标准依据是什么？"
+    }
+  ],
+  "lane_suggestion": "fast",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询涉及电缆绝缘选型依据，缺少电压等级等关键维度，但无需跨标准对比，单路检索可满足"
+}

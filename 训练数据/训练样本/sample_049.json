@@ -1,0 +1,25 @@
+{
+  "vagueness_score": 0.7,
+  "strategy": "clarify_optional",
+  "missing_dimension_keys": [
+    "equipment_type",
+    "voltage_level"
+  ],
+  "options": [
+    {
+      "label": "10kV配变接入标准",
+      "refined_query": "10kV配电变压器接入配网的技术参数参考标准"
+    },
+    {
+      "label": "35kV开关接入标准",
+      "refined_query": "35kV配网开关设备接入技术参数参考标准"
+    },
+    {
+      "label": "10kV电缆接入标准",
+      "refined_query": "10kV配网电缆接入设备技术参数参考标准"
+    }
+  ],
+  "lane_suggestion": "slow",
+  "lane_confidence": 0.85,
+  "lane_reason": "查询包含关联关键词'参考什么标准'，需要检索配网接入设备相关的多个标准，需多跳推理"
+}
