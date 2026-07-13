@@ -5,6 +5,7 @@ import RouteRecommendation from './RouteRecommendation';
 
 interface PreprocessConfirmPanelProps {
   preprocessResult: PreprocessResponse;
+  originalQuery: string;
   selectedOptionId: number | null;
   userLane: Lane | null;
   validationMessage?: string | null;
@@ -17,6 +18,7 @@ interface PreprocessConfirmPanelProps {
 
 export default function PreprocessConfirmPanel({
   preprocessResult,
+  originalQuery,
   selectedOptionId,
   userLane,
   validationMessage,
@@ -103,6 +105,7 @@ export default function PreprocessConfirmPanel({
             options={preprocessResult.options}
             strategy={preprocessResult.strategy}
             selectedId={selectedOptionId}
+            originalQuery={originalQuery}
             onSelect={onSelectOption}
           />
         </div>

@@ -16,21 +16,40 @@ class MetadataExtractor:
     """元数据提取器"""
 
     def __init__(self):
-        # 专业分类关键词映射
+        # 专业分类关键词映射（扩充版，提升识别准确率）
         self.category_keywords = {
-            '配电': ['配电室', '配电柜', '配电系统', '配电装置', '配电网'],
-            '变电': ['变电站', '变压器', '变电设备', '变电所'],
-            '继保': ['继电保护', '保护装置', '保护系统'],
-            '输电': ['输电线路', '架空线', '电缆'],
-            '安全': ['安全距离', '安全措施', '防护', '接地', '防雷'],
+            '配电': [
+                '配电室', '配电柜', '配电系统', '配电装置', '配电网',
+                '低压开关柜', '开关柜', '母线', '进线柜', '出线柜'
+            ],
+            '变电': [
+                '变电站', '变压器', '变电设备', '变电所',
+                '主变', '副变', '变电容量', '变电运行', '变电检修',
+                '油浸式', '干式变压器'
+            ],
+            '继保': [
+                '继电保护', '保护装置', '保护系统',
+                '整定', '整定计算', '保护配置', '保护定值',  # ← 扩充
+                '差动保护', '距离保护', '过流保护', '零序保护',  # ← 扩充
+                '保护原理', '选择性', '灵敏性', '速动性'  # ← 扩充
+            ],
+            '输电': [
+                '输电线路', '架空线', '电缆',
+                '输电走廊', '导线', '绝缘子', '杆塔', '输电容量'
+            ],
+            '安全': [
+                '安全距离', '安全措施', '防护', '接地', '防雷',
+                '安全净距', '防护等级', 'IP等级', '接地电阻', '接地装置'
+            ],
         }
 
-    def extract(self, query: str) -> Dict[str, Any]:
+    def extract(self, query: str, preprocessing_result=None) -> Dict[str, Any]:
         """
         提取元数据并生成过滤条件
 
         Args:
             query: 查询文本
+            preprocessing_result: 预处理结果（OptimizationResult），包含 LLM 识别的类别
 
         Returns:
             Dict: Qdrant Payload过滤条件
@@ -49,9 +68,23 @@ class MetadataExtractor:
             filters['standard_no'] = standard_no
 
         # 3. 提取专业分类
-        category = self._extract_category(query)
-        if category:
-            filters['category'] = category
+        # 优先使用 LLM 识别的类别（如果提供且置信度足够）
+        if preprocessing_result and hasattr(preprocessing_result, 'category'):
+            if preprocessing_result.category_confidence >= 0.6 and preprocessing_result.category != "通用":
+                filters['category'] = preprocessing_result.category
+                logger.info(f"[MetadataExtractor] Using LLM category: {preprocessing_result.category} (confidence={preprocessing_result.category_confidence:.2f})")
+            else:
+                # 置信度低或为"通用"，降级到关键词匹配
+                category = self._extract_category(query)
+                if category:
+                    filters['category'] = category
+                    logger.info(f"[MetadataExtractor] Using keyword category: {category} (LLM confidence too low or generic)")
+        else:
+            # 无预处理结果，使用关键词匹配
+            category = self._extract_category(query)
+            if category:
+                filters['category'] = category
+                logger.info(f"[MetadataExtractor] Using keyword category: {category} (no preprocessing result)")
 
         return filters
 
@@ -158,12 +191,13 @@ class MetadataExtractor:
 
         return None
 
-    def extract_all_metadata(self, query: str) -> Dict[str, Any]:
+    def extract_all_metadata(self, query: str, preprocessing_result=None) -> Dict[str, Any]:
         """
         提取所有元数据（不仅用于过滤）
 
         Args:
             query: 查询文本
+            preprocessing_result: 预处理结果（OptimizationResult），包含 LLM 识别的类别
 
         Returns:
             Dict: 完整元数据
@@ -171,8 +205,22 @@ class MetadataExtractor:
         metadata = {
             'voltage_level': self._extract_voltage_level(query),
             'standard_no': self._extract_standard_no(query),
-            'category': self._extract_category(query),
         }
+
+        # 优先使用 LLM 识别的类别（如果提供且置信度足够）
+        if preprocessing_result and hasattr(preprocessing_result, 'category'):
+            if preprocessing_result.category_confidence >= 0.6:
+                metadata['category'] = preprocessing_result.category
+                metadata['category_source'] = 'llm'
+                metadata['category_confidence'] = preprocessing_result.category_confidence
+            else:
+                # 置信度低，降级到关键词匹配
+                metadata['category'] = self._extract_category(query)
+                metadata['category_source'] = 'keyword'
+        else:
+            # 无预处理结果，使用关键词匹配
+            metadata['category'] = self._extract_category(query)
+            metadata['category_source'] = 'keyword'
 
         # 移除None值
         metadata = {k: v for k, v in metadata.items() if v is not None}

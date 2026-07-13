@@ -306,7 +306,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     const requiresSelection =
       preprocessResult.strategy === 'clarify_required' && preprocessResult.options.length > 0;
 
-    if (requiresSelection && selectedOptionId === null) {
+    if (requiresSelection && selectedOptionId === null && refinedQuery === null) {
       setError('请选择一个具体场景后再提交查询');
       setErrorSource('preprocess');
       setState('confirming');

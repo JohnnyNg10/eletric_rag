@@ -113,6 +113,7 @@ export function SearchPage() {
       {query.preprocessResult && query.state === 'confirming' ? (
         <PreprocessConfirmPanel
           preprocessResult={query.preprocessResult}
+          originalQuery={query.originalQuery}
           selectedOptionId={query.selectedOptionId}
           userLane={query.userLane}
           validationMessage={query.errorSource === 'preprocess' ? query.error : null}

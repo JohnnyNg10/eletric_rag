@@ -55,6 +55,10 @@ class OptimizationResult:
     lane_reason: str = ""                  # 路由理由（可读，展示给用户）
     missing_dimension_keys: List[str] = field(default_factory=list)  # 枚举键列表
 
+    # [新增] 类别识别字段（无需维护关键词库）
+    category: Optional[str] = None         # 配电/变电/继保/输电/安全/通用
+    category_confidence: float = 0.0       # 类别识别置信度 0-1
+
 
 class QueryOptimizer:
     """查询优化器"""
@@ -108,8 +112,9 @@ class QueryOptimizer:
             return await self._rule_based_optimize(query)
 
         # KB 聚合填充：对 standard_series 维度，用 ES 真实数据替换 LLM 生成的选项
-        if "standard_series" in result.missing_dimension_keys and result.options:
-            result = await self._fill_standard_series_options(query, result)
+        # 注意：这里不再填充标准号，只提供维度澄清
+        # if "standard_series" in result.missing_dimension_keys and result.options:
+        #     result = await self._fill_standard_series_options(query, result)
 
         return result
 
@@ -182,7 +187,7 @@ class QueryOptimizer:
         import json
 
         prompt = f"""
-你是电力标准知识库助手。分析以下查询的明确程度，生成澄清选项，并给出路由建议。
+你是电力标准知识库助手。分析以下查询的明确程度，识别专业类别，生成澄清选项，并给出路由建议。
 
 查询：{query}
 
@@ -193,15 +198,31 @@ class QueryOptimizer:
    - 0.6-0.8：中度笼统（缺少多个关键维度）
    - 0.8-1.0：严重笼统（缺少所有关键信息）
 
-2. 识别缺失维度（从以下枚举中选择）：{_DIM_KEYS_STR}
+2. 识别专业类别（从以下选项中单选）：
+   - "配电"：配电系统、配电室、配电柜、低压开关柜、母线等
+   - "变电"：变电站、变压器、变电设备、主变、副变等
+   - "继保"：继电保护、保护装置、整定计算、保护配置、差动保护、距离保护、过流保护等
+   - "输电"：输电线路、架空线、电缆、导线、杆塔等
+   - "通用"：跨类别查询，或主题词不明确的安全/技术要求
+
+   注意：
+   - "整定计算"属于继保
+   - "功率因数"可能跨类别，返回"通用"
+   - **"安全距离"、"接地"等是各类设备的通用要求，应根据设备主体判断类别**
+     - "配电室安全距离" → 配电（主体是配电室）
+     - "变压器接地" → 变电（主体是变压器）
+     - "架空线安全距离" → 输电（主体是架空线）
+   - 根据查询的**设备主体**判断，而非仅看通用术语
+
+3. 识别缺失维度（从以下枚举中选择）：{_DIM_KEYS_STR}
    返回英文键列表，如 ["voltage_level", "equipment_type"]
 
-3. 生成3个澄清选项（仅当笼统度>0.5时）
+4. 生成3个澄清选项（仅当笼统度>0.5时）
    - 每个选项补充一个不同的缺失维度
    - label：展示给用户的简短标题，5-12个字，点明核心区分维度
    - refined_query：实际用于检索的完整句子，须包含原始查询的主题 + 补充的具体维度信息，15-30个字
 
-4. 路由建议（fast或slow）：
+5. 路由建议（fast或slow）：
    - fast：明确标准号/条款号，或单一维度查询
    - slow：对比/差异/多跳推理/涉及多个标准的关联查询
    返回 lane_suggestion（fast/slow）、lane_confidence（0-1）、lane_reason（一句话理由）
@@ -209,6 +230,8 @@ class QueryOptimizer:
 返回JSON格式：
 {{
   "vagueness_score": 0.X,
+  "category": "继保",
+  "category_confidence": 0.9,
   "missing_dimension_keys": ["voltage_level", "equipment_type"],
   "reason": "缺失维度说明",
   "options": [
@@ -226,6 +249,8 @@ class QueryOptimizer:
 注意：
 - 如果笼统度<=0.5，options 返回空数组 []
 - missing_dimension_keys 必须是枚举键列表，不是中文描述
+- category 必须是上述类别之一（配电/变电/继保/输电/安全/通用）
+- category_confidence 是类别识别置信度（0-1），<0.6时建议不过滤类别
 - lane_suggestion 必须是 "fast" 或 "slow"
 - lane_confidence 是路由置信度（0-1），lane_reason 是给用户看的理由
 """
@@ -247,9 +272,14 @@ class QueryOptimizer:
         lane_confidence = float(result.get("lane_confidence", 0.7))
         lane_reason = result.get("lane_reason", "常规查询")
 
+        # [新增] 提取类别识别结果
+        category = result.get("category", "通用")
+        category_confidence = float(result.get("category_confidence", 0.0))
+
         # 日志记录
         logger.info(
             f"LLM optimize: query='{query}', score={vagueness_score:.2f}, "
+            f"category={category}({category_confidence:.2f}), "
             f"missing_dims={missing_dimension_keys}, options_count={len(raw_options)}, "
             f"lane={lane_suggestion}, confidence={lane_confidence:.2f}"
         )
@@ -264,7 +294,7 @@ class QueryOptimizer:
         else:
             strategy = "none"
 
-        # 构建选项列表
+        # 构建选项列表（不包含标准号推荐）
         options = []
         if raw_options:
             for i, opt in enumerate(raw_options[:3], 1):  # 最多3个
@@ -272,8 +302,9 @@ class QueryOptimizer:
                     id=i,
                     label=opt.get("label", f"{query}优化选项{i}"),
                     refined_query=opt.get("refined_query", query),
-                    standard_preview=None,  # TODO: 阶段2从知识库获取
-                    doc_count=0  # TODO: 阶段2从知识库统计
+                    standard_preview=None,  # 不返回标准号推荐
+                    doc_count=0,
+                    kb_verified=False  # 预处理阶段不验证标准
                 ))
 
         return OptimizationResult(
@@ -283,7 +314,9 @@ class QueryOptimizer:
             lane_suggestion=lane_suggestion,
             lane_confidence=lane_confidence,
             lane_reason=lane_reason,
-            missing_dimension_keys=missing_dimension_keys
+            missing_dimension_keys=missing_dimension_keys,
+            category=category,
+            category_confidence=category_confidence
         )
 
     async def _rule_based_optimize(self, query: str) -> OptimizationResult:

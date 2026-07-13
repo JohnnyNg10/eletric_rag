@@ -20,6 +20,7 @@ from app.core.preprocessing.query_rewriter import QueryRewriter
 from app.core.preprocessing.metadata_extractor import MetadataExtractor
 from app.core.retrieval.rerank import TwoStageReranker, RerankResult, get_reranker
 from app.core.retrieval.sufficiency import SufficiencyChecker, SufficiencyResult, get_sufficiency_checker
+from app.core.retrieval.hyde import get_hyde_generator
 from app.schemas.retrieval import ChunkResult
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class FastLaneResult:
     retry_triggered: bool  # 是否触发二次检索
     recall_count: int  # 召回块数量
     sufficiency_result: Optional[SufficiencyResult] = None  # 充分性判断结果
+    hyde_query: Optional[str] = None  # HyDE 生成的假设文档（若启用）
 
 
 class FastLane:
@@ -66,6 +68,9 @@ class FastLane:
         self.reranker = get_reranker()
         self.sufficiency_checker = get_sufficiency_checker()
 
+        # HyDE 生成器
+        self.hyde_generator = get_hyde_generator()
+
         # 数据库会话（用于召回层）
         self.db = db
 
@@ -76,7 +81,8 @@ class FastLane:
         self,
         query: str,
         user_context: Dict[str, Any],
-        strategy_params: Dict[str, Any]
+        strategy_params: Dict[str, Any],
+        preprocessing_result=None
     ) -> FastLaneResult:
         """
         执行快车道流程
@@ -85,6 +91,7 @@ class FastLane:
             query: 预处理后的清晰查询（已标准化）
             user_context: 用户上下文
             strategy_params: 检索策略参数
+            preprocessing_result: 预处理结果（OptimizationResult），包含 LLM 识别的类别
 
         Returns:
             FastLaneResult: 检索结果
@@ -95,15 +102,27 @@ class FastLane:
 
         # 步骤1: 查询增强（查询改写 + 元数据提取）
         expanded_queries = await self._enhance_query(query, strategy_params)
-        filters = self._extract_metadata(query)
-        metadata = self.metadata_extractor.extract_all_metadata(query)
+        filters = self._extract_metadata(query, preprocessing_result)  # 传递预处理结果
+        metadata = self.metadata_extractor.extract_all_metadata(query, preprocessing_result)  # 传递预处理结果
 
         logger.info(f"[FastLane] Expanded queries: {expanded_queries}")
         logger.info(f"[FastLane] Filters: {filters}")
         logger.info(f"[FastLane] Metadata: {metadata}")
 
-        # 步骤2: 三路并行召回
-        recalled_chunks = await self._multi_path_recall(expanded_queries, filters)
+        # 步骤1.5: 可选的类别特定 HyDE 生成
+        hyde_query = None
+        enable_hyde = strategy_params.get("enable_hyde", False)
+        if enable_hyde:
+            category = metadata.get('category')
+            hyde_query = await self.hyde_generator.generate(query, category)
+            logger.info(f"[FastLane] HyDE enabled, category={category}, hyde_query={hyde_query[:50]}...")
+
+        # 步骤2: 三路并行召回（向量召回使用 HyDE query）
+        recalled_chunks = await self._multi_path_recall(
+            expanded_queries,
+            filters,
+            hyde_query=hyde_query
+        )
         logger.info(f"[FastLane] Recalled {len(recalled_chunks)} chunks")
 
         # 步骤2.5: 去重（精确内容去重，避免重复标题占据精排名额）
@@ -174,7 +193,8 @@ class FastLane:
             retrieval_time=elapsed_ms,
             retry_triggered=retry_triggered,
             recall_count=len(reranked_results),
-            sufficiency_result=sufficiency_result
+            sufficiency_result=sufficiency_result,
+            hyde_query=hyde_query
         )
 
     async def _enhance_query(self, query: str, strategy_params: Dict) -> List[str]:
@@ -198,22 +218,25 @@ class FastLane:
 
         return expanded_queries
 
-    def _extract_metadata(self, query: str) -> Dict[str, Any]:
+    def _extract_metadata(self, query: str, preprocessing_result=None) -> Dict[str, Any]:
         """
         元数据提取：提取电压等级、标准号等过滤条件
 
         Args:
             query: 查询
+            preprocessing_result: 预处理结果（OptimizationResult），包含 LLM 识别的类别
 
         Returns:
             Dict: 元数据过滤条件
         """
-        return self.metadata_extractor.extract(query)
+        # 传递预处理结果给 MetadataExtractor
+        return self.metadata_extractor.extract(query, preprocessing_result)
 
     async def _multi_path_recall(
         self,
         queries: List[str],
-        filters: Dict[str, Any]
+        filters: Dict[str, Any],
+        hyde_query: Optional[str] = None
     ) -> List[ChunkResult]:
         """
         三路并行召回：向量 + 关键词 + 结构化
@@ -221,6 +244,7 @@ class FastLane:
         Args:
             queries: 扩展查询列表
             filters: 元数据过滤条件
+            hyde_query: HyDE 生成的假设文档（可选，仅用于向量召回）
 
         Returns:
             List[ChunkResult]: Top50候选块
@@ -237,11 +261,12 @@ class FastLane:
         # 使用第一个查询作为主查询
         main_query = queries[0] if queries else ""
 
-        # 执行三路召回
+        # 执行三路召回（向量召回使用 HyDE query，其他使用原查询）
         recalled_chunks = await self._recall_engine.recall(
             query=main_query,
             filters=filters,
-            expanded_queries=queries
+            expanded_queries=queries,
+            hyde_query=hyde_query  # 传递 HyDE query 给召回引擎
         )
 
         return recalled_chunks

@@ -4,6 +4,7 @@ interface ClarificationOptionsProps {
   options: OptimizationOption[];
   strategy: Strategy;
   selectedId: number | null;
+  originalQuery: string;
   onSelect: (optionId: number | null, refinedQuery: string | null) => void;
 }
 
@@ -18,13 +19,14 @@ export default function ClarificationOptions({
   options,
   strategy,
   selectedId,
+  originalQuery,
   onSelect,
 }: ClarificationOptionsProps) {
   if (strategy === 'none') {
     return null;
   }
 
-  const allowSkip = strategy !== 'clarify_required';
+  const allowSkip = true;
 
   return (
     <section className="options-card">
@@ -72,7 +74,7 @@ export default function ClarificationOptions({
         <button
           type="button"
           className={`option-item skip-option ${selectedId === null ? 'selected' : ''}`}
-          onClick={() => onSelect(null, null)}
+          onClick={() => onSelect(null, originalQuery)}
         >
           <div className="option-head">
             <span className="radio-indicator" aria-hidden="true">

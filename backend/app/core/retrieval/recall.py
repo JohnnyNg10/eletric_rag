@@ -602,7 +602,8 @@ class MultiPathRecall:
         self,
         query: str,
         filters: Dict[str, Any],
-        expanded_queries: Optional[List[str]] = None
+        expanded_queries: Optional[List[str]] = None,
+        hyde_query: Optional[str] = None
     ) -> List[ChunkResult]:
         """
         三路并行召回
@@ -611,15 +612,18 @@ class MultiPathRecall:
             query: 标准化后的查询
             filters: 元数据过滤条件
             expanded_queries: 扩展查询列表（快车道生成）
+            hyde_query: HyDE 生成的假设文档（可选，仅用于向量召回）
 
         Returns:
             List[ChunkResult]: 去重后的 Top50 文档块
         """
         start_time = time.time()
-        logger.warning(f"[MultiPathRecall] START query='{query}', filters={filters}")
+        logger.warning(f"[MultiPathRecall] START query='{query}', filters={filters}, hyde={bool(hyde_query)}")
 
         # 步骤1: 三路并行召回
-        vector_task = self.vector_recall.search(query, filters, top_k=20)
+        # 向量召回使用 HyDE query（如果提供），其他路径使用原 query
+        vector_query = hyde_query if hyde_query else query
+        vector_task = self.vector_recall.search(vector_query, filters, top_k=20)
         keyword_task = self.keyword_recall.search(query, filters, top_k=20)
         structured_task = self.structured_recall.search(query, filters, top_k=10)
 

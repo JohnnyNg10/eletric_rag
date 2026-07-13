@@ -1,4 +1,7 @@
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import type { Citation } from '../../types/query';
 
 interface AnswerDisplayProps {
@@ -57,7 +60,16 @@ export default function AnswerDisplay({
       {!error ? (
         <article className="answer-article" role="article" aria-live="polite">
           <div className="answer-markdown">
-            {answer ? <ReactMarkdown>{answer}</ReactMarkdown> : <p className="muted-text">正在等待模型返回内容...</p>}
+            {answer ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+              >
+                {answer}
+              </ReactMarkdown>
+            ) : (
+              <p className="muted-text">正在等待模型返回内容...</p>
+            )}
             {isStreaming ? <span className="typing-indicator">▋</span> : null}
           </div>
         </article>

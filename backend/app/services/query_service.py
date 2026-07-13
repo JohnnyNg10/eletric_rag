@@ -144,7 +144,8 @@ class QueryService:
             retrieval_result = await self.fast_lane.execute(
                 query=preprocessing_output.optimized_query,
                 user_context=user_context,
-                strategy_params=route_decision.strategy_params
+                strategy_params=route_decision.strategy_params,
+                preprocessing_result=preprocessing_output.optimization_result  # 传递预处理结果
             )
 
             lane_info = {

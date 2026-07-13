@@ -43,6 +43,13 @@ class PreprocessingOutput:
     lane_reason: str = ""
     missing_dimension_keys: list = None  # type: ignore[assignment]  # __post_init__ 保证不为 None
 
+    # [新增] 类别识别字段
+    category: Optional[str] = None
+    category_confidence: float = 0.0
+
+    # [新增] 保留原始 OptimizationResult（用于传递给 FastLane）
+    optimization_result: Optional['OptimizationResult'] = None
+
     def __post_init__(self):
         if self.missing_dimension_keys is None:
             self.missing_dimension_keys = []
@@ -111,7 +118,10 @@ class Preprocessor:
                     lane_suggestion=optimization_result.lane_suggestion,  # [阶段B]
                     lane_confidence=optimization_result.lane_confidence,  # [阶段B]
                     lane_reason=optimization_result.lane_reason,  # [阶段B]
-                    missing_dimension_keys=optimization_result.missing_dimension_keys  # [阶段B]
+                    missing_dimension_keys=optimization_result.missing_dimension_keys,  # [阶段B]
+                    category=optimization_result.category,  # [新增]
+                    category_confidence=optimization_result.category_confidence,  # [新增]
+                    optimization_result=optimization_result  # [新增] 保留原始对象
                 )
         else:
             optimization_result = None
@@ -126,6 +136,9 @@ class Preprocessor:
             lane_suggestion=optimization_result.lane_suggestion if optimization_result else 'fast',  # [阶段B]
             lane_confidence=optimization_result.lane_confidence if optimization_result else 0.7,  # [阶段B]
             lane_reason=optimization_result.lane_reason if optimization_result else '',  # [阶段B]
-            missing_dimension_keys=optimization_result.missing_dimension_keys if optimization_result else []  # [阶段B]
+            missing_dimension_keys=optimization_result.missing_dimension_keys if optimization_result else [],  # [阶段B]
+            category=optimization_result.category if optimization_result else None,  # [新增]
+            category_confidence=optimization_result.category_confidence if optimization_result else 0.0,  # [新增]
+            optimization_result=optimization_result  # [新增] 保留原始对象
         )
 
