@@ -53,6 +53,21 @@ class Document(Base):
     file_hash = Column(String(64), unique=True, comment="文件哈希")
     page_count = Column(Integer, comment="页数")
 
+    # 扫描件特有字段
+    is_scanned = Column(Boolean, default=False, comment="是否为扫描件")
+    ocr_engine = Column(String(50), comment="OCR引擎（PaddleOCR/Tesseract）")
+    ocr_confidence = Column(Float, comment="OCR平均置信度")
+    ocr_version = Column(String(50), comment="OCR引擎版本")
+
+    # 解析结果路径（MinIO）
+    markdown_path = Column(String(500), comment="Markdown文件路径")
+    images_prefix = Column(String(500), comment="图片文件前缀")
+    tables_prefix = Column(String(500), comment="表格文件前缀")
+
+    # 统计信息（扩展）
+    image_count = Column(Integer, default=0, comment="图片数量")
+    table_count = Column(Integer, default=0, comment="表格数量")
+
     # 处理状态
     process_status = Column(
         Enum('pending', 'processing', 'completed', 'failed', name='process_status_enum'),
@@ -105,6 +120,16 @@ class Chunk(Base):
         comment="块类型"
     )
 
+    # 内容类型（支持图片描述、表格摘要）
+    content_type = Column(
+        Enum('text', 'image_description', 'table_summary', name='content_type_enum'),
+        nullable=False,
+        default='text',
+        comment="内容类型"
+    )
+    related_resource_id = Column(BigInteger, comment="关联资源ID（图片/表格）")
+    related_resource_type = Column(String(20), comment="关联资源类型：image/table")
+
     # 向量信息
     vector_id = Column(String(100), comment="Qdrant向量ID")
     has_dense_vector = Column(Boolean, default=False, comment="是否有稠密向量")
@@ -140,8 +165,105 @@ class Chunk(Base):
         Index('idx_parent_chunk_id', 'parent_chunk_id'),
         Index('idx_vector_id', 'vector_id'),
         Index('idx_chunk_type', 'chunk_type'),
+        Index('idx_content_type', 'content_type'),
         Index('idx_clause', 'clause'),
+        UniqueConstraint('document_id', 'content_hash', name='uk_doc_content_hash'),
         {'comment': '文档块表'}
+    )
+
+
+class Image(Base):
+    """图片表"""
+    __tablename__ = "images"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="图片ID")
+    document_id = Column(BigInteger, ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, comment="所属文档ID")
+    chunk_id = Column(BigInteger, ForeignKey('chunks.id', ondelete='SET NULL'), nullable=True, comment="关联的VLM描述Chunk ID")
+
+    # 图片信息
+    image_type = Column(
+        Enum('figure', 'diagram', 'photo', 'chart', name='image_type_enum'),
+        nullable=False,
+        default='figure',
+        comment="图片类型"
+    )
+    minio_path = Column(String(500), nullable=False, comment="MinIO文件路径")
+    file_size = Column(Integer, comment="文件大小（字节）")
+    width = Column(Integer, comment="宽度（像素）")
+    height = Column(Integer, comment="高度（像素）")
+
+    # 位置信息
+    page_number = Column(Integer, nullable=False, comment="所在页码")
+    image_index = Column(Integer, nullable=False, comment="页内图片序号")
+    bbox = Column(JSON, comment="边界框坐标 {x, y, width, height}")
+
+    # 内容信息
+    caption = Column(Text, comment="图注/标题")
+    figure_number = Column(String(50), comment="图号（如 图5-2）")
+    ocr_text = Column(Text, comment="图内文字（OCR识别）")
+
+    # VLM生成的描述
+    vlm_description = Column(Text, comment="VLM生成的图片语义描述")
+    vlm_model = Column(String(50), comment="使用的VLM模型")
+    vlm_confidence = Column(Float, comment="VLM描述置信度")
+
+    # 元数据
+    meta_data = Column(JSON, comment="扩展元数据", name="metadata")
+
+    # 时间戳
+    created_at = Column(TIMESTAMP, server_default=func.now(), comment="创建时间")
+
+    # 索引
+    __table_args__ = (
+        Index('idx_images_document_id', 'document_id'),
+        Index('idx_images_chunk_id', 'chunk_id'),
+        Index('idx_images_page_number', 'page_number'),
+        Index('idx_images_figure_number', 'figure_number'),
+        UniqueConstraint('document_id', 'page_number', 'image_index', name='uk_images_doc_page_index'),
+        {'comment': '图片表'}
+    )
+
+
+class Table(Base):
+    """表格表"""
+    __tablename__ = "tables"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="表格ID")
+    document_id = Column(BigInteger, ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, comment="所属文档ID")
+    chunk_id = Column(BigInteger, ForeignKey('chunks.id', ondelete='SET NULL'), nullable=True, comment="关联的表格摘要Chunk ID")
+
+    # 表格信息
+    table_number = Column(String(50), comment="表号（如 表3-1）")
+    title = Column(Text, comment="表格标题")
+
+    # 位置信息
+    page_number = Column(Integer, nullable=False, comment="所在页码")
+    table_index = Column(Integer, nullable=False, comment="页内表格序号")
+    bbox = Column(JSON, comment="边界框坐标")
+
+    # 结构信息
+    row_count = Column(Integer, comment="行数")
+    col_count = Column(Integer, comment="列数")
+    headers = Column(JSON, comment="表头信息 [{name, type}]")
+
+    # 存储信息
+    minio_path = Column(String(500), nullable=False, comment="MinIO存储路径（图片形式）")
+    markdown_content = Column(Text, comment="表格Markdown文本")
+
+    # 元数据
+    meta_data = Column(JSON, comment="扩展元数据", name="metadata")
+
+    # 时间戳
+    created_at = Column(TIMESTAMP, server_default=func.now(), comment="创建时间")
+
+    # 索引
+    __table_args__ = (
+        Index('idx_tables_document_id', 'document_id'),
+        Index('idx_tables_chunk_id', 'chunk_id'),
+        Index('idx_tables_page_number', 'page_number'),
+        Index('idx_tables_table_number', 'table_number'),
+        UniqueConstraint('document_id', 'page_number', 'table_index', name='uk_tables_doc_page_index'),
+        {'comment': '表格表'}
     )
 
 

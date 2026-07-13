@@ -176,6 +176,9 @@ class QueryService:
             }
 
         # 步骤4: 生成答案
+        from app.storage.cache import get_cache_manager
+        cache = get_cache_manager()
+
         try:
             # 从retrieval_result提取rerank结果
             if route_decision.lane == "fast" and hasattr(retrieval_result, 'rerank_results'):
@@ -187,7 +190,6 @@ class QueryService:
                 chunks_for_generation = []
                 for chunk in retrieval_result.retrieved_chunks:
                     if isinstance(chunk, ChunkResult):
-                        # ChunkResult → RerankResult
                         chunks_for_generation.append(RerankResult(
                             chunk_id=chunk.chunk_id,
                             content=chunk.content,
@@ -199,7 +201,6 @@ class QueryService:
                             document_title=chunk.document_title
                         ))
                     elif isinstance(chunk, dict):
-                        # 兼容旧的 dict 格式
                         chunks_for_generation.append(RerankResult(
                             chunk_id=chunk.get('chunk_id', 0),
                             content=chunk.get('content', ''),
@@ -213,36 +214,54 @@ class QueryService:
 
             logger.info(f"[User {user_id}] Generating answer with {len(chunks_for_generation)} chunks")
 
-            generation_result = await self.generator.generate(
-                query=preprocessing_output.optimized_query,
-                chunks=chunks_for_generation
-            )
+            # L4 生成缓存
+            chunk_contents = [c.content for c in chunks_for_generation]
+            cached_gen = cache.get_generation(preprocessing_output.optimized_query, chunk_contents)
 
-            logger.info(f"[User {user_id}] Answer generated in {generation_result.generation_time}ms, tokens={generation_result.token_count}")
+            if cached_gen is not None:
+                logger.info(f"[User {user_id}] L4 generation cache hit")
+                answer = cached_gen["answer"]
+                citations = cached_gen["citations"]
+                generation_time = cached_gen.get("generation_time_ms", 0)
+                cache_hit = True
+            else:
+                generation_result = await self.generator.generate(
+                    query=preprocessing_output.optimized_query,
+                    chunks=chunks_for_generation
+                )
+                logger.info(f"[User {user_id}] Answer generated in {generation_result.generation_time}ms, tokens={generation_result.token_count}")
 
-            # 格式化citations为dict
-            citations_list = [
-                {
-                    'index': c.index,
-                    'chunk_id': c.chunk_id,
-                    'standard_no': c.standard_no,
-                    'clause': c.clause,
-                    'content_snippet': c.content_snippet,
-                    'document_title': c.document_title
-                }
-                for c in generation_result.citations
-            ]
+                citations = [
+                    {
+                        'index': c.index,
+                        'chunk_id': c.chunk_id,
+                        'standard_no': c.standard_no,
+                        'clause': c.clause,
+                        'content_snippet': c.content_snippet,
+                        'document_title': c.document_title
+                    }
+                    for c in generation_result.citations
+                ]
+                answer = generation_result.answer
+                generation_time = generation_result.generation_time
+                cache_hit = False
 
-            answer = generation_result.answer
-            generation_time = generation_result.generation_time
-            citations = citations_list
+                cache.set_generation(
+                    preprocessing_output.optimized_query,
+                    chunk_contents,
+                    {
+                        "answer": answer,
+                        "citations": citations,
+                        "generation_time_ms": generation_time,
+                    }
+                )
 
         except Exception as e:
             logger.error(f"[User {user_id}] Generation error: {e}", exc_info=True)
             answer = f"抱歉，生成答案时出现错误。"
             generation_time = 0
             citations = []
-            generation_result = None
+            cache_hit = False
 
         # 当前返回模拟结果
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -287,6 +306,7 @@ class QueryService:
             'status': 'success',
             'answer': answer,
             'citations': citations,
+            'cache_hit': cache_hit,
             'lane': route_decision.lane,
             'route_reason': route_decision.reason,
             'retrieval_time': lane_info.get('retrieval_time', 0),

@@ -130,11 +130,22 @@ class FastLane:
         logger.info(f"[FastLane] After dedup: {len(deduped_chunks)} chunks ({len(recalled_chunks) - len(deduped_chunks)} removed)")
 
         # 步骤3: 两阶段重排
-        reranked_results = await self.reranker.rerank(
-            query=query,
-            candidates=deduped_chunks,
-            top_k=8
-        )
+        from app.storage.cache import get_cache_manager
+        from dataclasses import asdict
+        cache = get_cache_manager()
+        chunk_ids = [c.chunk_id for c in deduped_chunks]
+
+        cached_rerank = cache.get_rerank(query, chunk_ids)
+        if cached_rerank is not None:
+            logger.info(f"[FastLane] L3 rerank cache hit: query={query[:30]!r}")
+            reranked_results = [RerankResult(**r) for r in cached_rerank]
+        else:
+            reranked_results = await self.reranker.rerank(
+                query=query,
+                candidates=deduped_chunks,
+                top_k=8
+            )
+            cache.set_rerank(query, chunk_ids, [asdict(r) for r in reranked_results])
         logger.info(f"[FastLane] Reranked to Top{len(reranked_results)}")
 
         # 步骤4: 充分性判断
@@ -253,22 +264,30 @@ class FastLane:
             logger.warning("[FastLane] No DB session, returning empty recall")
             return []
 
+        # L2 召回缓存
+        from app.storage.cache import get_cache_manager
+        cache = get_cache_manager()
+        main_query = queries[0] if queries else ""
+
+        cached_recall = cache.get_recall(main_query, filters)
+        if cached_recall is not None:
+            logger.info(f"[FastLane] L2 recall cache hit: query={main_query[:30]!r}")
+            return [ChunkResult(**r) for r in cached_recall]
+
         # 懒加载召回引擎
         if self._recall_engine is None:
             from app.core.retrieval.recall import MultiPathRecall
             self._recall_engine = MultiPathRecall(self.db)
-
-        # 使用第一个查询作为主查询
-        main_query = queries[0] if queries else ""
 
         # 执行三路召回（向量召回使用 HyDE query，其他使用原查询）
         recalled_chunks = await self._recall_engine.recall(
             query=main_query,
             filters=filters,
             expanded_queries=queries,
-            hyde_query=hyde_query  # 传递 HyDE query 给召回引擎
+            hyde_query=hyde_query
         )
 
+        cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks])
         return recalled_chunks
 
     async def _refine_query_for_gaps(

@@ -76,10 +76,20 @@ class Settings(BaseSettings):
     # Business Config
     MAX_RECALL_COUNT: int = 20
     TOP_K_RESULTS: int = 5
-    CACHE_TTL: int = 3600
+    CACHE_TTL: int = 3600  # 保留兼容，实际各级由下方配置控制
     QUERY_EXPAND_MAX: int = 3
     SLOW_LANE_MAX_STEPS: int = 3
     SLOW_LANE_TIMEOUT: int = 8000
+
+    # Cache Control（四级缓存开关与TTL）
+    CACHE_EMBEDDING_ENABLED: bool = True   # L1: Embedding 向量缓存
+    CACHE_RECALL_ENABLED: bool = True      # L2: 三路召回结果缓存
+    CACHE_RERANK_ENABLED: bool = True      # L3: 重排结果缓存
+    CACHE_GENERATION_ENABLED: bool = True  # L4: LLM 生成结果缓存
+    CACHE_EMBEDDING_TTL: int = 86400       # L1 TTL，默认 24h
+    CACHE_RECALL_TTL: int = 21600          # L2 TTL，默认 6h
+    CACHE_RERANK_TTL: int = 14400          # L3 TTL，默认 4h
+    CACHE_GENERATION_TTL: int = 7200       # L4 TTL，默认 2h
 
     # Security
     SECRET_KEY: str = "your-secret-key-here-change-in-production"
@@ -96,6 +106,23 @@ class Settings(BaseSettings):
     RERANKER_MODEL_BASE: str = "BAAI/bge-reranker-base"
     SPARSE_MODEL: str = "naver/efficient-splade-VI-BT-large-query"  # 稀疏向量模型
     AUTO_DOWNLOAD_MODELS: bool = True  # 启动时自动下载缺失的模型
+
+    # Scanned PDF Processing (扫描件PDF处理)
+    ENABLE_SCANNED_PDF: bool = False  # 是否启用扫描件处理
+    ENABLE_IMAGE_SEARCH: bool = False  # 是否启用图片检索
+    ENABLE_VLM_DESCRIPTION: bool = False  # 是否启用VLM描述生成
+
+    # VLM API Configuration
+    VLM_PROVIDER: str = "doubao"  # doubao / qwen / local
+    DOUBAO_API_KEY: str = ""
+    DOUBAO_API_ENDPOINT: str = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    DOUBAO_MODEL: str = "doubao-vision-pro"
+    QWEN_API_KEY: str = ""
+    QWEN_MODEL: str = "qwen-vl-plus"
+
+    # OCR Configuration
+    OCR_USE_GPU: bool = True
+    OCR_CONFIDENCE_THRESHOLD: float = 0.85  # OCR置信度阈值
 
     class Config:
         env_file = ".env"

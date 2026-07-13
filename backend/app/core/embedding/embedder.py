@@ -82,11 +82,23 @@ class Embedder:
         if self.dense_model is None:
             raise RuntimeError("Dense model not loaded")
 
+        # L1 缓存仅支持单个字符串查询（批量不缓存）
+        if isinstance(text, str):
+            from app.storage.cache import get_cache_manager
+            cache = get_cache_manager()
+            cached = cache.get_dense(text)
+            if cached is not None:
+                logger.debug(f"[Embedder] Dense cache hit: {text[:30]!r}")
+                return cached
+
         embeddings = self.dense_model.encode(
             text,
             normalize_embeddings=True,
             show_progress_bar=False
         )
+
+        if isinstance(text, str):
+            cache.set_dense(text, embeddings)
 
         return embeddings
 
@@ -103,6 +115,13 @@ class Embedder:
         if self.sparse_model is None:
             logger.warning("Sparse model not loaded, returning empty sparse vector")
             return {"indices": [], "values": []}
+
+        from app.storage.cache import get_cache_manager
+        cache = get_cache_manager()
+        cached = cache.get_sparse(text)
+        if cached is not None:
+            logger.debug(f"[Embedder] Sparse cache hit: {text[:30]!r}")
+            return cached
 
         try:
             import torch
@@ -135,7 +154,9 @@ class Embedder:
                     indices.append(idx)
                     values.append(float(weight))
 
-            return {"indices": indices, "values": values}
+            result = {"indices": indices, "values": values}
+            cache.set_sparse(text, result)
+            return result
 
         except Exception as e:
             logger.error(f"Sparse encoding failed: {e}")
