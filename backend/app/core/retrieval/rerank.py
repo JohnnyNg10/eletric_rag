@@ -339,6 +339,7 @@ class TwoStageReranker:
         """
         scores = []
         query_hash = self._hash_query(query)
+        model_version = self._hash_query(str(getattr(model, "name_or_path", model.__class__.__name__)))[:12]
 
         for i in range(0, len(candidates), batch_size):
             batch = candidates[i:i + batch_size]
@@ -347,7 +348,7 @@ class TwoStageReranker:
             for candidate in batch:
                 # 尝试从缓存读取
                 if self.enable_cache:
-                    cache_key = f"rerank:score:{query_hash}:{candidate.chunk_id}"
+                    cache_key = f"rerank:score:{stage}:{model_version}:{query_hash}:{candidate.chunk_id}"
                     cached_score = cache.get(cache_key)
                     if cached_score is not None:
                         batch_scores.append(float(cached_score))

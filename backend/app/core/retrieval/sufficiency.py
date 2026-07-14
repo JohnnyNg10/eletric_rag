@@ -40,6 +40,7 @@ class SufficiencyChecker:
         rule_coverage_min_count: int = 2,
         llm_confidence_threshold: float = 0.7,
         llm_timeout: float = 1.5,  # 1.5秒超时
+        conservative_fallback: bool = True,
     ):
         """
         初始化充分性检查器
@@ -50,12 +51,14 @@ class SufficiencyChecker:
             rule_coverage_min_count: 规则-覆盖度最小块数
             llm_confidence_threshold: LLM置信度阈值
             llm_timeout: LLM判断超时时间（秒）
+            conservative_fallback: 超时/异常时是否保守判定为不充分
         """
         self.rule_top1_threshold = rule_top1_threshold
         self.rule_coverage_threshold = rule_coverage_threshold
         self.rule_coverage_min_count = rule_coverage_min_count
         self.llm_confidence_threshold = llm_confidence_threshold
         self.llm_timeout = llm_timeout
+        self.conservative_fallback = conservative_fallback
 
         self.llm_client = get_llm_client()
 
@@ -116,22 +119,35 @@ class SufficiencyChecker:
                 )
 
         except asyncio.TimeoutError:
-            logger.warning(f"[SufficiencyCheck] LLM check TIMEOUT (>{self.llm_timeout}s), defaulting to sufficient")
+            logger.warning(f"[SufficiencyCheck] LLM check TIMEOUT (>{self.llm_timeout}s)")
+            if not self.conservative_fallback:
+                return SufficiencyResult(
+                    sufficient=True,
+                    source="timeout_fallback",
+                    confidence=0.0,
+                    gaps=[]
+                )
             return SufficiencyResult(
-                sufficient=True,
+                sufficient=False,
                 source="timeout_fallback",
                 confidence=0.0,
-                gaps=[]
+                gaps=["LLM充分性判断超时，保守触发二次检索"]
             )
 
         except Exception as e:
             logger.error(f"[SufficiencyCheck] LLM check ERROR: {e}", exc_info=True)
-            # 异常时默认充分，避免阻塞
+            if not self.conservative_fallback:
+                return SufficiencyResult(
+                    sufficient=True,
+                    source="error_fallback",
+                    confidence=0.0,
+                    gaps=[]
+                )
             return SufficiencyResult(
-                sufficient=True,
+                sufficient=False,
                 source="error_fallback",
                 confidence=0.0,
-                gaps=[]
+                gaps=["LLM充分性判断异常，保守触发二次检索"]
             )
 
     def _rule_check(self, top_results: List[RerankResult]) -> tuple[bool, str]:

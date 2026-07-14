@@ -42,6 +42,11 @@ class FastLaneResult:
     recall_count: int  # 召回块数量
     sufficiency_result: Optional[SufficiencyResult] = None  # 充分性判断结果
     hyde_query: Optional[str] = None  # HyDE 生成的假设文档（若启用）
+    filters_relaxed: bool = False  # 是否放宽过过滤条件
+    original_filters: Optional[Dict[str, Any]] = None  # 初始过滤条件
+    final_filters: Optional[Dict[str, Any]] = None  # 最终使用的过滤条件
+    retry_sufficiency_checked: bool = False  # 二次检索后是否重新判断充分性
+    final_sufficiency_source: str = "initial"  # 最终充分性来源：initial/retry
 
 
 class FastLane:
@@ -82,6 +87,10 @@ class FastLane:
         # 召回引擎（懒加载）
         self._recall_engine = None
 
+        # 过滤放宽配置：低召回时按优先级逐步移除硬过滤
+        self.filter_relaxation_threshold = 3
+        self.filter_relaxation_priority = ["voltage_level", "category", "doc_type", "standard_no"]
+
     async def execute(
         self,
         query: str,
@@ -114,6 +123,11 @@ class FastLane:
         logger.info(f"[FastLane] Filters: {filters}")
         logger.info(f"[FastLane] Metadata: {metadata}")
 
+        # 记录初始过滤条件
+        original_filters = filters.copy() if filters else {}
+        filters_relaxed = False
+        final_filters = filters
+
         # 步骤1.5: 可选的类别特定 HyDE 生成
         hyde_query = None
         enable_hyde = strategy_params.get("enable_hyde", False)
@@ -122,13 +136,13 @@ class FastLane:
             hyde_query = await self.hyde_generator.generate(query, category)
             logger.info(f"[FastLane] HyDE enabled, category={category}, hyde_query={hyde_query[:50]}...")
 
-        # 步骤2: 三路并行召回（向量召回使用 HyDE query）
-        recalled_chunks = await self._multi_path_recall(
+        # 步骤2: 三路并行召回（向量召回使用 HyDE query，支持过滤放宽）
+        recalled_chunks, filters_relaxed, final_filters = await self._recall_with_filter_relaxation(
             expanded_queries,
             filters,
             hyde_query=hyde_query
         )
-        logger.info(f"[FastLane] Recalled {len(recalled_chunks)} chunks")
+        logger.info(f"[FastLane] Recalled {len(recalled_chunks)} chunks (filters_relaxed={filters_relaxed})")
 
         # 步骤2.5: 去重（精确内容去重，避免重复标题占据精排名额）
         deduped_chunks = self._deduplicate_candidates(recalled_chunks)
@@ -208,6 +222,18 @@ class FastLane:
             retry_triggered = True
             retry_count = 1
 
+            # 二次检索后重新判断充分性
+            if len(reranked_results) > 0:
+                logger.info(f"[FastLane] Re-checking sufficiency after retry with {len(reranked_results)} results")
+                retry_sufficiency_result = await self.sufficiency_checker.check(
+                    query=query,
+                    top_results=reranked_results
+                )
+                logger.info(f"[FastLane] Retry sufficiency: {retry_sufficiency_result.sufficient} (source={retry_sufficiency_result.source})")
+                sufficiency_result = retry_sufficiency_result
+            else:
+                logger.warning(f"[FastLane] Retry produced no results, keeping original sufficiency")
+
         # 步骤6: 子块扩展（父块 → 父块+高相关子块）
         from app.core.retrieval.child_expander import ChildChunkExpander
 
@@ -240,7 +266,12 @@ class FastLane:
             retry_triggered=retry_triggered,
             recall_count=len(reranked_results),
             sufficiency_result=sufficiency_result,
-            hyde_query=hyde_query
+            hyde_query=hyde_query,
+            filters_relaxed=filters_relaxed,
+            original_filters=original_filters,
+            final_filters=final_filters,
+            retry_sufficiency_checked=(retry_count > 0 and len(reranked_results) > 0),
+            final_sufficiency_source="retry" if retry_count > 0 else "initial"
         )
 
     async def _enhance_query(self, query: str, strategy_params: Dict) -> List[str]:
@@ -325,6 +356,46 @@ class FastLane:
 
         cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks], hyde_enabled)
         return recalled_chunks
+
+    async def _recall_with_filter_relaxation(
+        self,
+        queries: List[str],
+        filters: Dict[str, Any],
+        hyde_query: Optional[str] = None
+    ) -> tuple[List[ChunkResult], bool, Dict[str, Any]]:
+        """
+        三路召回，支持低召回时自动放宽过滤条件
+
+        Returns:
+            (召回块, 是否放宽过滤, 最终过滤条件)
+        """
+        # 初次召回
+        recalled_chunks = await self._multi_path_recall(queries, filters, hyde_query)
+
+        # 判断是否需要放宽过滤
+        if len(recalled_chunks) >= self.filter_relaxation_threshold or not filters:
+            return recalled_chunks, False, filters
+
+        logger.warning(f"[FastLane] Low recall ({len(recalled_chunks)} < {self.filter_relaxation_threshold}), attempting filter relaxation")
+
+        relaxed_filters = filters.copy()
+        for filter_key in self.filter_relaxation_priority:
+            if filter_key not in relaxed_filters:
+                continue
+
+            dropped_value = relaxed_filters.pop(filter_key)
+            logger.info(f"[FastLane] Relaxing filter: {filter_key}={dropped_value}")
+
+            # 重试召回
+            retry_chunks = await self._multi_path_recall(queries, relaxed_filters, hyde_query)
+
+            if len(retry_chunks) >= self.filter_relaxation_threshold:
+                logger.info(f"[FastLane] Filter relaxation successful: {len(retry_chunks)} chunks (removed {filter_key})")
+                return retry_chunks, True, relaxed_filters
+
+        # 全部放宽仍不足，返回最后结果
+        logger.warning(f"[FastLane] Filter relaxation exhausted, final recall: {len(retry_chunks)} chunks")
+        return retry_chunks, True, relaxed_filters
 
     async def _refine_query_for_gaps(
         self,

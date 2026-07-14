@@ -12,7 +12,8 @@ from qdrant_client.models import (
     Distance, VectorParams, SparseVectorParams,
     PointStruct, SearchRequest, Filter,
     FieldCondition, MatchValue, MatchAny, Range,
-    ScoredPoint, Prefetch, Query, FusionQuery
+    ScoredPoint, Prefetch, Query, FusionQuery,
+    Fusion, SparseVector, NamedSparseVector
 )
 import logging
 import uuid
@@ -153,8 +154,8 @@ class VectorStore:
             query_filter = self._build_filter(filter_conditions) if filter_conditions else None
 
             if sparse_vector and sparse_vector.get("indices"):
-                # 混合检索（稠密 + 稀疏向量，使用 prefetch + query API）
-                # 先用稠密向量 prefetch，再用稀疏向量 query 并融合
+                # 真正的混合检索：稠密 prefetch + 稀疏 prefetch，RRF 融合
+                logger.info(f"[VectorStore] Hybrid search: dense+sparse RRF fusion, limit={limit}")
                 results = self.client.query_points(
                     collection_name=self.collection_name,
                     prefetch=[
@@ -162,11 +163,17 @@ class VectorStore:
                             query=dense_vector,
                             using="dense",
                             limit=limit * 2
+                        ),
+                        Prefetch(
+                            query=SparseVector(
+                                indices=sparse_vector["indices"],
+                                values=sparse_vector["values"]
+                            ),
+                            using="sparse",
+                            limit=limit * 2
                         )
                     ],
-                    query=FusionQuery(
-                        fusion="rrf"  # Reciprocal Rank Fusion
-                    ),
+                    query=FusionQuery(fusion=Fusion.RRF),
                     query_filter=query_filter,
                     limit=limit,
                     with_payload=True

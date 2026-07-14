@@ -172,22 +172,44 @@ class CacheManager:
     # L3：重排缓存
     # ------------------------------------------------------------------
 
-    def get_rerank(self, query: str, chunk_ids: List[int]) -> Optional[List[Dict]]:
+    def get_rerank(
+        self,
+        query: str,
+        chunk_ids: List[int],
+        stage: str = "two_stage",
+        top_k: int = 5,
+        model_version: str = "default",
+    ) -> Optional[List[Dict]]:
         """获取重排缓存"""
         if not settings.CACHE_RERANK_ENABLED:
             return None
-        key = self._rerank_key(query, chunk_ids)
+        key = self._rerank_key(query, chunk_ids, stage, top_k, model_version)
         return self._get_json(key)
 
-    def set_rerank(self, query: str, chunk_ids: List[int], results: List[Dict]) -> bool:
+    def set_rerank(
+        self,
+        query: str,
+        chunk_ids: List[int],
+        results: List[Dict],
+        stage: str = "two_stage",
+        top_k: int = 5,
+        model_version: str = "default",
+    ) -> bool:
         """写入重排缓存"""
         if not settings.CACHE_RERANK_ENABLED:
             return False
-        key = self._rerank_key(query, chunk_ids)
+        key = self._rerank_key(query, chunk_ids, stage, top_k, model_version)
         return self._set_json(key, results, settings.CACHE_RERANK_TTL)
 
-    def _rerank_key(self, query: str, chunk_ids: List[int]) -> str:
-        raw = query + "|" + str(sorted(chunk_ids))
+    def _rerank_key(
+        self,
+        query: str,
+        chunk_ids: List[int],
+        stage: str,
+        top_k: int,
+        model_version: str,
+    ) -> str:
+        raw = query + "|" + stage + "|" + str(top_k) + "|" + model_version + "|" + str(sorted(chunk_ids))
         return f"rerank:{_md5(raw)}"
 
     # ------------------------------------------------------------------
