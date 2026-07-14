@@ -35,8 +35,8 @@ class SufficiencyChecker:
 
     def __init__(
         self,
-        rule_top1_threshold: float = 0.6,
-        rule_coverage_threshold: float = 0.5,
+        rule_top1_threshold: float = 0.3,
+        rule_coverage_threshold: float = 0.2,
         rule_coverage_min_count: int = 2,
         llm_confidence_threshold: float = 0.7,
         llm_timeout: float = 1.5,  # 1.5秒超时

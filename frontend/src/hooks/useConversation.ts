@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { executeQuery, preprocessQuery } from '../api/query';
+import { executeQuery, getConversationHistory, preprocessQuery } from '../api/query';
 import { getErrorMessage, isAbortError, isTimeoutError } from '../api/client';
-import type { Citation, Lane, PreprocessResponse, QueryResponse, QueryResultMeta, QueryState } from '../types/query';
+import type { Citation, Lane, PreprocessResponse, QueryResultMeta } from '../types/query';
 import {
   buildClarificationContext,
   buildVaguenessWarning,
@@ -9,6 +9,24 @@ import {
   normalizePreprocessResponse,
   shouldAutoSubmit,
 } from '../utils/query';
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: Citation[];
+  metadata?: {
+    lane?: Lane;
+    retrieval_time?: number | null;
+    generation_time?: number | null;
+    expanded_queries?: string[];
+    query_log_id?: number | null;
+  };
+  status: 'streaming' | 'completed' | 'error';
+  timestamp: Date;
+}
+
+type ConversationState = 'idle' | 'preprocessing' | 'confirming' | 'querying' | 'completed' | 'error';
 
 interface QueryExecutionSnapshot {
   query: string;
@@ -18,18 +36,7 @@ interface QueryExecutionSnapshot {
   userLane: Lane | null;
 }
 
-function buildMetaFromResponse(response: QueryResponse): QueryResultMeta {
-  return {
-    status: response.status,
-    lane: response.lane ?? undefined,
-    retrieval_time: response.retrieval_time ?? null,
-    generation_time: response.generation_time ?? null,
-    expanded_queries: response.expanded_queries ?? [],
-    query_log_id: response.query_log_id ?? null,
-  };
-}
-
-function buildFallbackPreprocess(snapshot: QueryExecutionSnapshot, response: QueryResponse) {
+function buildFallbackPreprocess(snapshot: QueryExecutionSnapshot, response: any) {
   return normalizePreprocessResponse({
     normalized_query: snapshot.preprocess.normalized_query || snapshot.query,
     vagueness_score: response.vagueness_score ?? snapshot.preprocess.vagueness_score,
@@ -41,20 +48,20 @@ function buildFallbackPreprocess(snapshot: QueryExecutionSnapshot, response: Que
   });
 }
 
-export function useQuery({ accessToken }: { accessToken: string }) {
-  const [state, setState] = useState<QueryState>('idle');
+export function useConversation({ accessToken }: { accessToken: string }) {
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [state, setState] = useState<ConversationState>('idle');
   const [originalQuery, setOriginalQuery] = useState('');
   const [preprocessResult, setPreprocessResult] = useState<PreprocessResponse | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null);
   const [refinedQuery, setRefinedQuery] = useState<string | null>(null);
   const [userLane, setUserLane] = useState<Lane | null>(null);
-  const [answer, setAnswer] = useState('');
-  const [citations, setCitations] = useState<Citation[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<'preprocess' | 'query' | null>(null);
   const [timeoutNotice, setTimeoutNotice] = useState<string | null>(null);
-  const [resultMeta, setResultMeta] = useState<QueryResultMeta | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const preprocessCacheRef = useRef(new Map<string, PreprocessResponse>());
@@ -78,7 +85,14 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       window.clearTimeout(flushTimerRef.current);
       flushTimerRef.current = null;
     }
-    setAnswer((previous) => previous + nextChunk);
+    setMessages((prev) => {
+      const updated = [...prev];
+      const lastMsg = updated[updated.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant' && lastMsg.status === 'streaming') {
+        lastMsg.content += nextChunk;
+      }
+      return updated;
+    });
   }, []);
 
   const appendDelta = useCallback((delta: string) => {
@@ -91,7 +105,14 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       streamBufferRef.current = '';
       flushTimerRef.current = null;
       if (nextChunk) {
-        setAnswer((previous) => previous + nextChunk);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMsg = updated[updated.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.status === 'streaming') {
+            lastMsg.content += nextChunk;
+          }
+          return updated;
+        });
       }
     }, 50);
   }, []);
@@ -102,15 +123,73 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     clearBufferedAnswer();
   }, [clearBufferedAnswer]);
 
-  const clearOutputState = useCallback(() => {
-    setAnswer('');
-    setCitations([]);
-    setTimeoutNotice(null);
+  const loadConversation = useCallback(
+    async (id: string) => {
+      if (!accessToken) return;
+
+      setIsLoadingHistory(true);
+      setConversationId(id);
+      setMessages([]);
+      setState('idle');
+      setError(null);
+      setWarning(null);
+      setPreprocessResult(null);
+
+      try {
+        const history = await getConversationHistory(accessToken, id);
+        const loadedMessages: Message[] = [];
+
+        history.forEach((item) => {
+          loadedMessages.push({
+            id: `${item.query_log_id}-q`,
+            role: 'user',
+            content: item.query,
+            status: 'completed',
+            timestamp: new Date(item.created_at),
+          });
+
+          if (item.answer) {
+            loadedMessages.push({
+              id: `${item.query_log_id}-a`,
+              role: 'assistant',
+              content: item.answer,
+              citations: item.citations,
+              metadata: {
+                lane: item.lane,
+                query_log_id: item.query_log_id,
+              },
+              status: 'completed',
+              timestamp: new Date(item.created_at),
+            });
+          }
+        });
+
+        setMessages(loadedMessages);
+      } catch (err) {
+        setError(getErrorMessage(err, '加载会话历史失败'));
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    },
+    [accessToken],
+  );
+
+  const startNewConversation = useCallback(() => {
+    cancelActiveRequest();
+    setConversationId(null);
+    setMessages([]);
+    setState('idle');
+    setOriginalQuery('');
+    setPreprocessResult(null);
+    setSelectedOptionId(null);
+    setRefinedQuery(null);
+    setUserLane(null);
+    setWarning(null);
     setError(null);
     setErrorSource(null);
-    setResultMeta(null);
-    clearBufferedAnswer();
-  }, [clearBufferedAnswer]);
+    setTimeoutNotice(null);
+    lastExecutionRef.current = null;
+  }, [cancelActiveRequest]);
 
   const executeConfirmedQuery = useCallback(
     async (snapshot: QueryExecutionSnapshot) => {
@@ -122,9 +201,27 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       }
 
       cancelActiveRequest();
-      clearOutputState();
       setState('querying');
       lastExecutionRef.current = snapshot;
+
+      const userMsg: Message = {
+        id: `temp-${Date.now()}-q`,
+        role: 'user',
+        content: snapshot.refinedQuery || snapshot.query,
+        status: 'completed',
+        timestamp: new Date(),
+      };
+
+      const assistantMsg: Message = {
+        id: `temp-${Date.now()}-a`,
+        role: 'assistant',
+        content: '',
+        citations: [],
+        status: 'streaming',
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
@@ -134,9 +231,15 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       }, 150000);
 
       try {
+        if (!conversationId) {
+          const newId = crypto.randomUUID();
+          setConversationId(newId);
+        }
+
         const response = await executeQuery(
           {
             query: snapshot.query,
+            conversation_id: conversationId || undefined,
             stream: true,
             refined_query: snapshot.refinedQuery,
             selected_option_id: snapshot.selectedOptionId,
@@ -148,17 +251,38 @@ export function useQuery({ accessToken }: { accessToken: string }) {
             signal: controller.signal,
             onDelta: appendDelta,
             onCitation: (citation) => {
-              setCitations((previous) => mergeCitation(previous, citation));
+              setMessages((prev) => {
+                const updated = [...prev];
+                const lastMsg = updated[updated.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  lastMsg.citations = mergeCitation(lastMsg.citations || [], citation);
+                }
+                return updated;
+              });
             },
             onDone: () => {
               flushBufferedAnswer();
+              setMessages((prev) => {
+                const updated = [...prev];
+                const lastMsg = updated[updated.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant' && lastMsg.status === 'streaming') {
+                  lastMsg.status = 'completed';
+                }
+                return updated;
+              });
             },
             onMeta: (meta) => {
-              setResultMeta((previous) => ({
-                status: previous?.status ?? 'success',
-                ...previous,
-                ...meta,
-              }));
+              setMessages((prev) => {
+                const updated = [...prev];
+                const lastMsg = updated[updated.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  lastMsg.metadata = {
+                    ...lastMsg.metadata,
+                    ...meta,
+                  };
+                }
+                return updated;
+              });
             },
           },
         );
@@ -166,6 +290,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
         flushBufferedAnswer();
 
         if (response?.status === 'need_clarification') {
+          setMessages((prev) => prev.slice(0, -1));
           const fallbackPreprocess = buildFallbackPreprocess(snapshot, response);
           setPreprocessResult(fallbackPreprocess);
           setSelectedOptionId(null);
@@ -178,16 +303,21 @@ export function useQuery({ accessToken }: { accessToken: string }) {
           return;
         }
 
-        if (response) {
-          setResultMeta(buildMetaFromResponse(response));
-        }
-
         setState('completed');
       } catch (queryError) {
         if (isAbortError(queryError)) {
           return;
         }
         flushBufferedAnswer();
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMsg = updated[updated.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant') {
+            lastMsg.status = 'error';
+            lastMsg.content = getErrorMessage(queryError, '查询失败，请稍后重试');
+          }
+          return updated;
+        });
         setError(getErrorMessage(queryError, '查询失败，请稍后重试'));
         setErrorSource('query');
         setState('error');
@@ -198,7 +328,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
         }
       }
     },
-    [accessToken, appendDelta, cancelActiveRequest, clearOutputState, flushBufferedAnswer],
+    [accessToken, appendDelta, cancelActiveRequest, conversationId, flushBufferedAnswer],
   );
 
   const handlePreprocessReady = useCallback(
@@ -241,7 +371,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     [accessToken],
   );
 
-  const submitQuery = useCallback(
+  const sendQuery = useCallback(
     async (query: string) => {
       const nextQuery = query.trim();
       if (!nextQuery) {
@@ -258,13 +388,15 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       }
 
       cancelActiveRequest();
-      clearOutputState();
       setOriginalQuery(nextQuery);
       setWarning(null);
       setPreprocessResult(null);
       setSelectedOptionId(null);
       setRefinedQuery(null);
       setUserLane(null);
+      setError(null);
+      setErrorSource(null);
+      setTimeoutNotice(null);
       setState('preprocessing');
 
       const cacheKey = nextQuery.toLowerCase();
@@ -297,7 +429,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
         }
       }
     },
-    [accessToken, cancelActiveRequest, clearOutputState, handlePreprocessReady, requestPreprocess],
+    [accessToken, cancelActiveRequest, handlePreprocessReady, requestPreprocess],
   );
 
   const confirmAndExecute = useCallback(async () => {
@@ -328,9 +460,9 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       return;
     }
     if (originalQuery) {
-      await submitQuery(originalQuery);
+      await sendQuery(originalQuery);
     }
-  }, [executeConfirmedQuery, originalQuery, submitQuery]);
+  }, [executeConfirmedQuery, originalQuery, sendQuery]);
 
   const toggleLane = useCallback(() => {
     const suggestedLane = preprocessResult?.lane_suggestion.lane;
@@ -365,19 +497,6 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     setUserLane(null);
   }, [cancelActiveRequest]);
 
-  const resetConversation = useCallback(() => {
-    cancelActiveRequest();
-    clearOutputState();
-    setState('idle');
-    setOriginalQuery('');
-    setPreprocessResult(null);
-    setSelectedOptionId(null);
-    setRefinedQuery(null);
-    setUserLane(null);
-    setWarning(null);
-    lastExecutionRef.current = null;
-  }, [cancelActiveRequest, clearOutputState]);
-
   useEffect(() => {
     return () => {
       cancelActiveRequest();
@@ -385,26 +504,27 @@ export function useQuery({ accessToken }: { accessToken: string }) {
   }, [cancelActiveRequest]);
 
   return {
+    conversationId,
+    messages,
     state,
     originalQuery,
     preprocessResult,
     selectedOptionId,
     refinedQuery,
     userLane,
-    answer,
-    citations,
     warning,
     error,
     errorSource,
     timeoutNotice,
-    resultMeta,
+    isLoadingHistory,
     isBusy: state === 'preprocessing' || state === 'querying',
-    submitQuery,
+    sendQuery,
     confirmAndExecute,
     retryLastExecution,
     toggleLane,
     selectOption,
     cancelConfirmation,
-    resetConversation,
+    loadConversation,
+    startNewConversation,
   };
 }

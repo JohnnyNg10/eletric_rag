@@ -19,7 +19,7 @@ class MetadataExtractor:
         # 专业分类关键词映射（扩充版，提升识别准确率）
         self.category_keywords = {
             '配电': [
-                '配电室', '配电柜', '配电系统', '配电装置', '配电网',
+                '配电室', '配电柜', '配电系统', '配电装置', '配电网', '配网',
                 '低压开关柜', '开关柜', '母线', '进线柜', '出线柜'
             ],
             '变电': [
@@ -182,14 +182,21 @@ class MetadataExtractor:
             query: 查询文本
 
         Returns:
-            Optional[str]: 专业分类
+            Optional[str]: 专业分类，如果匹配多个则返回 None（避免过度过滤）
         """
-        # 遍历分类关键词，返回第一个匹配的分类
+        # 收集所有匹配的分类
+        matched_categories = []
         for category, keywords in self.category_keywords.items():
             if any(keyword in query for keyword in keywords):
-                return category
+                matched_categories.append(category)
 
-        return None
+        # 如果匹配多个分类，说明是跨领域查询，不应该用单一分类过滤
+        if len(matched_categories) > 1:
+            logger.info(f"[MetadataExtractor] Query matches multiple categories: {matched_categories}, skip category filter")
+            return None
+
+        # 返回唯一匹配的分类
+        return matched_categories[0] if matched_categories else None
 
     def extract_all_metadata(self, query: str, preprocessing_result=None) -> Dict[str, Any]:
         """

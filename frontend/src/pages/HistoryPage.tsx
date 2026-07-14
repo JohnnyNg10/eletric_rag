@@ -67,17 +67,12 @@ export function HistoryPage() {
     <section className="page-panel">
       <div className="panel-header-row">
         <div>
-          <div className="panel-eyebrow">查询历史</div>
-          <h1 className="panel-title">已接入真实后端的历史记录分页接口</h1>
+          <h1 className="panel-title">查询历史</h1>
         </div>
         <button type="button" className="primary-button" onClick={() => navigate('/search')}>
-          去查询台
+          新建查询
         </button>
       </div>
-
-      <p className="page-description">
-        本页直接对接 `GET /api/v1/query/history`。你可以查看每次查询的车道、耗时、反馈分数，并一键回跳到查询页重新执行历史问题。
-      </p>
 
       {isLoading ? <div className="info-banner">正在加载查询历史...</div> : null}
       {error ? <div className="error-banner">{error}</div> : null}
@@ -85,7 +80,7 @@ export function HistoryPage() {
       {!isLoading && !error && !hasData ? (
         <div className="empty-page-state">
           <h2 className="panel-title">还没有查询记录</h2>
-          <p className="page-description">先去查询台发起一次真实查询，系统写入 `query_logs` 后这里就会展示分页结果。</p>
+          <p className="page-description">发起查询后，历史记录将会显示在这里。</p>
         </div>
       ) : null}
 

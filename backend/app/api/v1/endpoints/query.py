@@ -318,3 +318,34 @@ async def get_query_history(
         page_size=page_size,
         has_more=(page * page_size) < total,
     )
+
+
+@router.get("/conversations", summary="获取会话列表")
+async def get_conversations(
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取当前用户的所有会话列表。
+
+    返回会话的基本信息：conversation_id、标题（首条query）、消息数量、时间。
+    按最后活跃时间倒序排列。
+    """
+    from app.db.repositories.query_repo import QueryLogRepository
+
+    repo = QueryLogRepository(db)
+    conversations, total = repo.get_conversations_list(
+        user_id=current_user.id,
+        page=page,
+        page_size=page_size
+    )
+
+    return {
+        "conversations": conversations,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (page * page_size) < total
+    }

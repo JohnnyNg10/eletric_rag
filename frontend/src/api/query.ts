@@ -322,3 +322,84 @@ export async function submitQueryFeedback(
     message: String(raw?.message ?? '反馈已记录'),
   } as QueryFeedbackResponse;
 }
+
+export interface ConversationItem {
+  conversation_id: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  last_message_at: string;
+}
+
+export interface ConversationsResponse {
+  conversations: ConversationItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export interface ConversationMessage {
+  query_log_id: number;
+  query: string;
+  answer: string | null;
+  citations: Citation[];
+  lane?: 'fast' | 'slow';
+  created_at: string;
+}
+
+export async function getConversations(
+  token: string,
+  page = 1,
+  pageSize = 20,
+): Promise<ConversationsResponse> {
+  const raw = await requestJson<any>(
+    `/query/conversations?page=${page}&page_size=${pageSize}`,
+    { method: 'GET' },
+    { token, timeoutMs: 100000 },
+  );
+
+  const conversations: ConversationItem[] = Array.isArray(raw?.conversations)
+    ? raw.conversations.map((item: any) => ({
+        conversation_id: String(item?.conversation_id ?? ''),
+        title: String(item?.title ?? '未命名会话'),
+        message_count: Number(item?.message_count ?? 0),
+        created_at: String(item?.created_at ?? ''),
+        last_message_at: String(item?.last_message_at ?? ''),
+      }))
+    : [];
+
+  return {
+    conversations,
+    total: Number(raw?.total ?? 0),
+    page: Number(raw?.page ?? page),
+    page_size: Number(raw?.page_size ?? pageSize),
+    has_more: Boolean(raw?.has_more),
+  };
+}
+
+export async function getConversationHistory(
+  token: string,
+  conversationId: string,
+): Promise<ConversationMessage[]> {
+  const raw = await requestJson<any>(
+    `/query/history?conversation_id=${conversationId}&page=1&page_size=100`,
+    { method: 'GET' },
+    { token, timeoutMs: 100000 },
+  );
+
+  const items: ConversationMessage[] = Array.isArray(raw?.items)
+    ? raw.items.map((item: any) => ({
+        query_log_id: Number(item?.query_log_id ?? 0),
+        query: String(item?.query ?? ''),
+        answer: typeof item?.answer === 'string' ? item.answer : null,
+        citations: Array.isArray(item?.citations)
+          ? item.citations.map((c: any) => normalizeCitation(c))
+          : [],
+        lane: item?.lane === 'slow' ? 'slow' : item?.lane === 'fast' ? 'fast' : undefined,
+        created_at: String(item?.created_at ?? ''),
+      }))
+    : [];
+
+  return items;
+}

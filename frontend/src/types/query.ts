@@ -44,6 +44,7 @@ export interface ClarificationContext {
 
 export interface QueryExecutionRequest {
   query: string;
+  conversation_id?: string;
   stream?: boolean;
   refined_query?: string | null;
   selected_option_id?: number | null;
@@ -53,17 +54,20 @@ export interface QueryExecutionRequest {
 
 export interface Citation {
   id: number;
+  index?: number;
   standard_no: string | null;
   title: string | null;
   chapter: string | null;
   clause: string | null;
   content_preview: string;
+  content_snippet?: string;
+  document_title?: string;
   chunk_id: string;
 }
 
 export interface QueryResultMeta {
   status: string;
-  lane?: Lane | null;
+  lane?: Lane;
   retrieval_time?: number | null;
   generation_time?: number | null;
   expanded_queries?: string[];

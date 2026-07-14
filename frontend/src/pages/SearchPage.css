@@ -1,0 +1,59 @@
+.chat-layout {
+  display: flex;
+  height: calc(100vh - 64px);
+  background: var(--color-bg-primary);
+  position: relative;
+}
+
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-input-area {
+  flex-shrink: 0;
+  padding: 16px 20px 20px;
+  background: var(--color-bg-primary);
+  border-top: 1px solid var(--color-border);
+}
+
+.chat-input-area .query-input-container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.preprocess-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.preprocess-overlay .confirm-panel {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  margin: auto;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
