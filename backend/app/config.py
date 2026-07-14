@@ -91,6 +91,16 @@ class Settings(BaseSettings):
     CACHE_RERANK_TTL: int = 14400          # L3 TTL，默认 4h
     CACHE_GENERATION_TTL: int = 7200       # L4 TTL，默认 2h
 
+    # Multi-turn Conversation（多轮对话）
+    MAX_HISTORY_TURNS: int = 5               # 历史注入轮数上限
+    MAX_HISTORY_TOKENS: int = 2000           # 历史 token 预算（按字符数 /1.5 粗估）
+    COREFERENCE_RESOLUTION_ENABLED: bool = True  # 是否启用指代消解
+
+    # Child Chunk Expansion（父子块检索扩展）
+    CHILD_EXPANSION_ENABLED: bool = True        # 是否启用子块扩展
+    CHILD_SIMILARITY_THRESHOLD: float = 0.7     # 子块相似度阈值
+    MAX_CHILDREN_PER_PARENT: int = 5            # 每个父块最多保留的子块数
+
     # Security
     SECRET_KEY: str = "your-secret-key-here-change-in-production"
     ALGORITHM: str = "HS256"

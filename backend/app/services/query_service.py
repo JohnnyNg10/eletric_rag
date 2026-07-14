@@ -11,7 +11,7 @@
 符合架构设计：
   预处理层 → 路由层 → 快车道/慢车道 → 生成层
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import logging
 import time
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from app.core.preprocessing import (
     PreprocessingInput,
     PreprocessingOutput
 )
+from app.core.preprocessing.coreference_resolver import CoreferenceResolver
 from app.core.retrieval import (
     Router,
     FastLane,
@@ -31,6 +32,7 @@ from app.core.generation import (
     get_generator
 )
 from app.db.models import QueryLog, ClarificationLog
+from app.db.repositories.query_repo import QueryLogRepository
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,8 @@ class QueryService:
         self.slow_lane = SlowLane(db=db)  # 慢车道也需要DB会话
         self.generator = get_generator(enable_validation=False)  # 生成器（默认不开启验证以节省成本）
         self.db = db  # 数据库会话，用于日志记录
+        self.query_log_repo = QueryLogRepository(db) if db else None
+        self.coreference_resolver = CoreferenceResolver()
 
     async def execute_query(
         self,
@@ -79,9 +83,24 @@ class QueryService:
         start_time = time.time()
         logger.info(f"[User {user_id}] Execute query: {query}")
 
+        # ── 多轮对话：加载历史 + 指代消解 ────────────────────────────────
+        conversation_history: List[Dict[str, str]] = []
+        if conversation_id and self.query_log_repo:
+            from app.config import settings as cfg
+            conversation_history = self.query_log_repo.get_conversation_history(
+                conversation_id, limit=cfg.MAX_HISTORY_TURNS
+            )
+
+        resolved_query = query
+        if conversation_history and refined_query is None:
+            resolved_query = self.coreference_resolver.resolve(query, conversation_history)
+            if resolved_query != query:
+                logger.info(f"[MultiTurn] 指代消解: {query!r} → {resolved_query!r}")
+
         # 判断是否为澄清后的查询
         is_clarified_query = refined_query is not None
-        actual_query = refined_query if is_clarified_query else query
+        # 澄清查询使用 refined_query；普通查询使用指代消解后的 resolved_query
+        actual_query = refined_query if is_clarified_query else resolved_query
 
         # 步骤1: 预处理
         if is_clarified_query:
@@ -123,7 +142,7 @@ class QueryService:
             route_decision = RouteDecision(
                 lane=user_lane,
                 reason=f"用户选择：{user_lane}车道",
-                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3} if user_lane == "fast" else {"max_steps": 3, "step_timeout": 2000, "total_timeout": 7000}
+                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3, "enable_hyde": True} if user_lane == "fast" else {"max_steps": 3, "step_timeout": 2000, "total_timeout": 7000}
             )
             predicted_lane = preprocessing_output.lane_suggestion if hasattr(preprocessing_output, 'lane_suggestion') else "fast"
             lane_confidence = preprocessing_output.lane_confidence if hasattr(preprocessing_output, 'lane_confidence') else 0.7
@@ -216,7 +235,7 @@ class QueryService:
 
             # L4 生成缓存
             chunk_contents = [c.content for c in chunks_for_generation]
-            cached_gen = cache.get_generation(preprocessing_output.optimized_query, chunk_contents)
+            cached_gen = cache.get_generation(preprocessing_output.optimized_query, chunk_contents, conversation_id)
 
             if cached_gen is not None:
                 logger.info(f"[User {user_id}] L4 generation cache hit")
@@ -227,7 +246,8 @@ class QueryService:
             else:
                 generation_result = await self.generator.generate(
                     query=preprocessing_output.optimized_query,
-                    chunks=chunks_for_generation
+                    chunks=chunks_for_generation,
+                    history=conversation_history if conversation_history else None
                 )
                 logger.info(f"[User {user_id}] Answer generated in {generation_result.generation_time}ms, tokens={generation_result.token_count}")
 
@@ -253,7 +273,8 @@ class QueryService:
                         "answer": answer,
                         "citations": citations,
                         "generation_time_ms": generation_time,
-                    }
+                    },
+                    conversation_id
                 )
 
         except Exception as e:

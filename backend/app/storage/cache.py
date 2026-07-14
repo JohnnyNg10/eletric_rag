@@ -123,26 +123,49 @@ class CacheManager:
         key = f"embedding:sparse:{_md5(text)}"
         return self._set_json(key, sparse_vec, settings.CACHE_EMBEDDING_TTL)
 
+    def get_dense_by_id(self, chunk_id: int) -> Optional[np.ndarray]:
+        """通过 chunk_id 获取稠密向量缓存（避免内容冲突）"""
+        if not settings.CACHE_EMBEDDING_ENABLED:
+            return None
+        key = f"embedding:dense:id:{chunk_id}"
+        raw = self._get_raw(key)
+        if raw is None:
+            return None
+        try:
+            decoded = base64.b64decode(raw)
+            return np.frombuffer(decoded, dtype=np.float32).copy()
+        except Exception as e:
+            logger.warning(f"[Cache] Dense decode failed for chunk_id={chunk_id}: {e}")
+            return None
+
+    def set_dense_by_id(self, chunk_id: int, vector: np.ndarray) -> bool:
+        """通过 chunk_id 写入稠密向量缓存"""
+        if not settings.CACHE_EMBEDDING_ENABLED:
+            return False
+        key = f"embedding:dense:id:{chunk_id}"
+        encoded = base64.b64encode(vector.astype(np.float32).tobytes())
+        return self._set_raw(key, encoded, settings.CACHE_EMBEDDING_TTL)
+
     # ------------------------------------------------------------------
     # L2：召回缓存
     # ------------------------------------------------------------------
 
-    def get_recall(self, query: str, filters: Dict) -> Optional[List[Dict]]:
+    def get_recall(self, query: str, filters: Dict, hyde_enabled: bool = False) -> Optional[List[Dict]]:
         """获取召回缓存"""
         if not settings.CACHE_RECALL_ENABLED:
             return None
-        key = self._recall_key(query, filters)
+        key = self._recall_key(query, filters, hyde_enabled)
         return self._get_json(key)
 
-    def set_recall(self, query: str, filters: Dict, chunks: List[Dict]) -> bool:
+    def set_recall(self, query: str, filters: Dict, chunks: List[Dict], hyde_enabled: bool = False) -> bool:
         """写入召回缓存"""
         if not settings.CACHE_RECALL_ENABLED:
             return False
-        key = self._recall_key(query, filters)
+        key = self._recall_key(query, filters, hyde_enabled)
         return self._set_json(key, chunks, settings.CACHE_RECALL_TTL)
 
-    def _recall_key(self, query: str, filters: Dict) -> str:
-        raw = query + "|" + json.dumps(filters, sort_keys=True, ensure_ascii=False)
+    def _recall_key(self, query: str, filters: Dict, hyde_enabled: bool = False) -> str:
+        raw = query + "|" + json.dumps(filters, sort_keys=True, ensure_ascii=False) + f"|hyde={hyde_enabled}"
         return f"recall:{_md5(raw)}"
 
     # ------------------------------------------------------------------
@@ -171,16 +194,20 @@ class CacheManager:
     # L4：生成缓存
     # ------------------------------------------------------------------
 
-    def get_generation(self, query: str, chunk_contents: List[str]) -> Optional[Dict]:
-        """获取生成缓存"""
+    def get_generation(self, query: str, chunk_contents: List[str], conversation_id: Optional[str] = None) -> Optional[Dict]:
+        """获取生成缓存（多轮对话时跳过缓存）"""
         if not settings.CACHE_GENERATION_ENABLED:
+            return None
+        if conversation_id:
             return None
         key = self._generation_key(query, chunk_contents)
         return self._get_json(key)
 
-    def set_generation(self, query: str, chunk_contents: List[str], result: Dict) -> bool:
-        """写入生成缓存"""
+    def set_generation(self, query: str, chunk_contents: List[str], result: Dict, conversation_id: Optional[str] = None) -> bool:
+        """写入生成缓存（多轮对话时跳过缓存）"""
         if not settings.CACHE_GENERATION_ENABLED:
+            return False
+        if conversation_id:
             return False
         key = self._generation_key(query, chunk_contents)
         return self._set_json(key, result, settings.CACHE_GENERATION_TTL)

@@ -21,7 +21,8 @@ from app.core.preprocessing.metadata_extractor import MetadataExtractor
 from app.core.retrieval.rerank import TwoStageReranker, RerankResult, get_reranker
 from app.core.retrieval.sufficiency import SufficiencyChecker, SufficiencyResult, get_sufficiency_checker
 from app.core.retrieval.hyde import get_hyde_generator
-from app.schemas.retrieval import ChunkResult
+from app.core.retrieval.reference_extractor import get_reference_extractor
+from app.schemas.retrieval import ChunkResult, ExpandedChunkResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class FastLaneResult:
     status: str  # "success" or "insufficient"
     retrieved_chunks: List[Dict]  # 召回的文档块（转换为dict）
     rerank_results: List[RerankResult]  # 重排结果（保留完整对象）
+    expanded_results: List[ExpandedChunkResult]  # 扩展结果（父块+子块）
     expanded_queries: List[str]  # 扩展查询列表
     filters: Dict[str, Any]  # 元数据过滤条件
     metadata: Dict[str, Any]  # 提取的元数据
@@ -70,6 +72,9 @@ class FastLane:
 
         # HyDE 生成器
         self.hyde_generator = get_hyde_generator()
+
+        # 跨标准引用提取器
+        self.reference_extractor = get_reference_extractor()
 
         # 数据库会话（用于召回层）
         self.db = db
@@ -158,17 +163,33 @@ class FastLane:
         retry_triggered = False
         retry_count = 0
 
-        # 步骤5: 可选二次检索
+        # 步骤5: 可选二次检索（增强：检测跨标准引用并补充检索）
         if not sufficiency_result.sufficient and strategy_params.get("enable_retry", True) and retry_count == 0:
             logger.info(f"[FastLane] Sufficiency check failed, triggering retry")
 
+            # 提取被引用标准号（从 gaps 和已召回 chunks）
+            referenced_standards_from_gaps = self.reference_extractor.extract_from_gaps(sufficiency_result.gaps)
+            referenced_standards_from_chunks = self.reference_extractor.extract_from_chunks(
+                [c.model_dump() for c in recalled_chunks]
+            )
+            all_referenced_standards = list(set(referenced_standards_from_gaps + referenced_standards_from_chunks))
+
+            if all_referenced_standards:
+                logger.info(f"[FastLane] Detected referenced standards: {all_referenced_standards}")
+
             # 基于gaps改写查询
-            retry_query = await self._refine_query_for_gaps(query, sufficiency_result.gaps)
+            retry_query = await self._refine_query_for_gaps(query, sufficiency_result.gaps, all_referenced_standards)
             logger.info(f"[FastLane] Retry query: {retry_query}")
 
             # 补充召回
             retry_chunks = await self._multi_path_recall([retry_query], filters)
             logger.info(f"[FastLane] Retry recalled {len(retry_chunks)} chunks")
+
+            # 如果检测到被引用标准，额外针对这些标准进行精确召回
+            if all_referenced_standards:
+                ref_chunks = await self._recall_referenced_standards(all_referenced_standards)
+                logger.info(f"[FastLane] Referenced standards recall: {len(ref_chunks)} chunks")
+                retry_chunks.extend(ref_chunks)
 
             # 合并去重（保留原Top5 + 补充召回）
             merged_chunks = self._merge_deduplicate(recalled_chunks, retry_chunks)
@@ -187,6 +208,19 @@ class FastLane:
             retry_triggered = True
             retry_count = 1
 
+        # 步骤6: 子块扩展（父块 → 父块+高相关子块）
+        from app.core.retrieval.child_expander import ChildChunkExpander
+
+        # 将 RerankResult 转换为 ChunkResult（用于子块扩展）
+        parent_chunk_results = [self._rerank_result_to_chunk_result(r) for r in reranked_results]
+
+        expander = ChildChunkExpander(self.db)
+        expanded_results = await expander.expand(
+            parent_chunks=parent_chunk_results,
+            query=query
+        )
+        logger.info(f"[FastLane] Expanded {len(expanded_results)} parent chunks with children")
+
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.info(f"[FastLane] Completed in {elapsed_ms}ms")
 
@@ -198,6 +232,7 @@ class FastLane:
             status="success",
             retrieved_chunks=retrieved_chunks_dict,
             rerank_results=reranked_results,
+            expanded_results=expanded_results,
             expanded_queries=expanded_queries,
             filters=filters,
             metadata=metadata,
@@ -268,10 +303,11 @@ class FastLane:
         from app.storage.cache import get_cache_manager
         cache = get_cache_manager()
         main_query = queries[0] if queries else ""
+        hyde_enabled = bool(hyde_query)
 
-        cached_recall = cache.get_recall(main_query, filters)
+        cached_recall = cache.get_recall(main_query, filters, hyde_enabled)
         if cached_recall is not None:
-            logger.info(f"[FastLane] L2 recall cache hit: query={main_query[:30]!r}")
+            logger.info(f"[FastLane] L2 recall cache hit: query={main_query[:30]!r}, hyde={hyde_enabled}")
             return [ChunkResult(**r) for r in cached_recall]
 
         # 懒加载召回引擎
@@ -287,13 +323,14 @@ class FastLane:
             hyde_query=hyde_query
         )
 
-        cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks])
+        cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks], hyde_enabled)
         return recalled_chunks
 
     async def _refine_query_for_gaps(
         self,
         original_query: str,
-        gaps: List[str]
+        gaps: List[str],
+        referenced_standards: Optional[List[str]] = None
     ) -> str:
         """
         基于信息缺口改写查询（用于二次检索）
@@ -301,6 +338,7 @@ class FastLane:
         Args:
             original_query: 原始查询
             gaps: 信息缺口列表
+            referenced_standards: 被引用标准号列表（如 ["GB/T 14549-2023"]）
 
         Returns:
             改写后的查询
@@ -308,16 +346,75 @@ class FastLane:
         if not gaps:
             return original_query
 
-        # 调用QueryRewriter生成针对缺口的查询
+        # 如果检测到被引用标准，优先构造针对性查询
+        if referenced_standards:
+            # 从 gaps 中提取用户真正关心的内容（去掉"缺少XX标准"的描述）
+            core_need = self._extract_core_need_from_gaps(gaps)
+            # 构造查询：核心需求 + 被引用标准
+            standards_text = " ".join(referenced_standards)
+            refined_query = f"{core_need} {standards_text}"
+            return refined_query
+
+        # 无被引用标准时，简单拼接 gaps
         gaps_text = "、".join(gaps)
         refined_query = f"{original_query} {gaps_text}"
 
-        # TODO: 可以用LLM更智能地改写
-        # refined_query = await self.query_rewriter.rewrite_for_gaps(
-        #     original_query, gaps
-        # )
-
         return refined_query
+
+    def _extract_core_need_from_gaps(self, gaps: List[str]) -> str:
+        """
+        从 gaps 中提取用户核心需求，去除"缺少XX标准"这类描述
+
+        示例：
+          gaps = ["缺少 GB/T 14549 的具体限值", "未找到电压等级分类"]
+          返回："具体限值 电压等级分类"
+        """
+        core_needs = []
+        for gap in gaps:
+            # 去掉常见的"缺少"、"未找到"等前缀
+            cleaned = re.sub(r'^(缺少|未找到|没有|不包含)\s*', '', gap)
+            # 去掉标准号（已在 referenced_standards 中）
+            cleaned = re.sub(r'(GB|DL|NB)[/\s]*[T]?\s*\d+[-–—]\d+\s*(的)?', '', cleaned)
+            cleaned = cleaned.strip()
+            if cleaned:
+                core_needs.append(cleaned)
+        return " ".join(core_needs) if core_needs else "详细内容"
+
+    async def _recall_referenced_standards(
+        self,
+        standard_nos: List[str]
+    ) -> List[ChunkResult]:
+        """
+        针对被引用标准进行精确召回
+
+        Args:
+            standard_nos: 被引用标准号列表，如 ["GB/T 14549-2023", "GB 50054-2011"]
+
+        Returns:
+            召回的文档块列表
+        """
+        if not standard_nos:
+            return []
+
+        from app.core.retrieval.recall import StructuredRecall
+        structured_recall = StructuredRecall(self.db)
+
+        all_chunks = []
+        for standard_no in standard_nos:
+            # 规范化标准号（去除多余空格）
+            normalized_std = re.sub(r'\s+', ' ', standard_no).strip()
+
+            # 使用结构化召回精确匹配标准号
+            filters = {"standard_no": normalized_std}
+            chunks = await structured_recall.search(
+                query="",  # 结构化召回不需要查询文本
+                filters=filters,
+                top_k=10  # 每个被引用标准取 Top10
+            )
+            all_chunks.extend(chunks)
+            logger.info(f"[FastLane] Referenced standard {normalized_std}: recalled {len(chunks)} chunks")
+
+        return all_chunks
 
     def _merge_deduplicate(
         self,
@@ -412,3 +509,23 @@ class FastLane:
             'page_start': result.page_start,
             'page_end': result.page_end,
         }
+
+    def _rerank_result_to_chunk_result(self, result: RerankResult) -> ChunkResult:
+        """将RerankResult转换为ChunkResult（用于子块扩展）"""
+        return ChunkResult(
+            chunk_id=result.chunk_id,
+            content=result.content,
+            document_id=result.document_id,
+            score=result.score,
+            document_title=result.document_title,
+            standard_no=result.standard_no,
+            doc_type=result.doc_type,
+            category=result.category,
+            voltage_level=result.voltage_level,
+            clause=result.clause,
+            chapter=result.chapter,
+            section=result.section,
+            page_start=result.page_start,
+            page_end=result.page_end,
+            recall_source=result.recall_source
+        )

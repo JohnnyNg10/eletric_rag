@@ -48,3 +48,13 @@ class RecallResponse(BaseModel):
     total: int = Field(..., description="总数")
     latency_ms: int = Field(..., description="召回耗时（毫秒）")
     sources_stats: Dict[str, int] = Field(default_factory=dict, description="各召回源统计")
+
+
+class ExpandedChunkResult(BaseModel):
+    """扩展后的检索结果（父块 + 高相关子块）"""
+    parent: ChunkResult = Field(..., description="父块")
+    relevant_children: List[ChunkResult] = Field(default_factory=list, description="高相关子块，按相似度降序")
+    expansion_stats: Optional[Dict[str, Any]] = Field(None, description="扩展统计信息")
+
+    class Config:
+        from_attributes = True

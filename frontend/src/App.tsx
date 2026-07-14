@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import AppHeader from './components/layout/AppHeader';
 import { useAuthContext } from './context/AuthContext';
 import { HistoryPage } from './pages/HistoryPage';
@@ -8,20 +8,19 @@ import { SearchPage } from './pages/SearchPage';
 
 function AppLayout() {
   const auth = useAuthContext();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await auth.logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div className="app-shell">
       <AppHeader
-        apiBaseUrl={auth.apiBaseUrl}
         accessToken={auth.accessToken}
         user={auth.user}
-        isLoading={auth.isLoading}
-        isLoggingIn={auth.isLoggingIn}
-        error={auth.error}
-        onApiBaseUrlChange={auth.updateApiBaseUrl}
-        onLogin={auth.login}
-        onLogout={auth.logout}
-        onManualTokenChange={auth.updateManualToken}
+        onLogout={handleLogout}
       />
 
       <main className="app-main">

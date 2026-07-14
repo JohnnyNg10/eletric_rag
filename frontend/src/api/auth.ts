@@ -1,4 +1,4 @@
-import type { LoginRequest, TokenResponse, UserInfo } from '../types/auth';
+import type { LoginRequest, TokenResponse, UserInfo, RefreshResponse } from '../types/auth';
 import { requestJson, requestResponse } from './client';
 
 export async function login(data: LoginRequest) {
@@ -14,6 +14,12 @@ export async function getCurrentUser(token: string) {
   }, { token, timeoutMs: 100000 });
 }
 
+export async function refreshAccessToken(refreshToken: string) {
+  return requestJson<RefreshResponse>('/auth/refresh', {
+    method: 'POST',
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+}
 
 export async function logout(token: string) {
   return requestResponse('/auth/logout', {

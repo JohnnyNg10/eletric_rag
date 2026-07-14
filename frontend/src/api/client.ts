@@ -1,4 +1,4 @@
-import { getStoredApiBaseUrl, getStoredAuth } from '../utils/storage';
+import { getStoredApiBaseUrl, getStoredAuth, setStoredAuth } from '../utils/storage';
 
 export class ApiError extends Error {
   status: number;
@@ -9,6 +9,55 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+  }
+}
+
+// Token 刷新状态管理
+let isRefreshing = false;
+let refreshSubscribers: Array<(token: string) => void> = [];
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((callback) => callback(token));
+  refreshSubscribers = [];
+}
+
+function addRefreshSubscriber(callback: (token: string) => void) {
+  refreshSubscribers.push(callback);
+}
+
+async function attemptTokenRefresh(): Promise<string | null> {
+  const storedAuth = getStoredAuth();
+  if (!storedAuth?.refreshToken) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(joinUrl(getStoredApiBaseUrl(), '/auth/refresh'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({ refresh_token: storedAuth.refreshToken }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json() as { access_token: string; expires_in: number };
+    const newAccessToken = data.access_token;
+
+    // 更新存储（保留原有 refreshToken 和 user）
+    setStoredAuth({
+      accessToken: newAccessToken,
+      refreshToken: storedAuth.refreshToken,
+      user: storedAuth.user,
+    });
+
+    return newAccessToken;
+  } catch {
+    return null;
   }
 }
 
@@ -78,6 +127,7 @@ export async function requestResponse(
   options?: {
     token?: string;
     timeoutMs?: number;
+    skipRetry?: boolean;
   },
 ) {
   const baseUrl = getStoredApiBaseUrl();
@@ -104,6 +154,36 @@ export async function requestResponse(
       signal,
     });
 
+    // 401 未授权：尝试刷新 token 并重试（仅重试一次）
+    if (response.status === 401 && !options?.skipRetry && path !== '/auth/refresh' && path !== '/auth/login') {
+      cleanup();
+
+      if (isRefreshing) {
+        // 已有刷新请求进行中，等待刷新完成后用新 token 重试
+        return new Promise<Response>((resolve, reject) => {
+          addRefreshSubscriber((newToken: string) => {
+            requestResponse(path, init, { ...options, token: newToken, skipRetry: true })
+              .then(resolve)
+              .catch(reject);
+          });
+        });
+      }
+
+      // 发起刷新
+      isRefreshing = true;
+      const newToken = await attemptTokenRefresh();
+      isRefreshing = false;
+
+      if (newToken) {
+        onRefreshed(newToken);
+        // 用新 token 重试
+        return requestResponse(path, init, { ...options, token: newToken, skipRetry: true });
+      } else {
+        // 刷新失败，抛出原始 401 错误
+        throw await buildApiError(response);
+      }
+    }
+
     if (!response.ok) {
       throw await buildApiError(response);
     }
@@ -120,6 +200,7 @@ export async function requestJson<T>(
   options?: {
     token?: string;
     timeoutMs?: number;
+    skipRetry?: boolean;
   },
 ) {
   const response = await requestResponse(path, init, options);

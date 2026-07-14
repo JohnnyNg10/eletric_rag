@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
@@ -62,8 +63,15 @@ export default function AnswerDisplay({
           <div className="answer-markdown">
             {answer ? (
               <ReactMarkdown
-                remarkPlugins={[remarkMath]}
+                remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
+                components={{
+                  table: ({ children }) => (
+                    <div className="markdown-table-scroll">
+                      <table>{children}</table>
+                    </div>
+                  ),
+                }}
               >
                 {answer}
               </ReactMarkdown>

@@ -58,7 +58,7 @@ class Router:
             return RouteDecision(
                 lane="fast",
                 reason="包含明确标准号或条款号，可精确定位",
-                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3}
+                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3, "enable_hyde": True}
             )
 
         # 规则2: 对比/引用关键词 → 慢车道
@@ -81,7 +81,7 @@ class Router:
         return RouteDecision(
             lane="fast",
             reason="常规单一维度查询",
-            strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3}
+            strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3, "enable_hyde": True}
         )
 
     def _has_explicit_standard_clause(self, query: str) -> bool:

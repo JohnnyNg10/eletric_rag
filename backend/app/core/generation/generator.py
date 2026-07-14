@@ -7,6 +7,7 @@ from typing import List, Optional, AsyncIterator, Dict, Any
 from dataclasses import dataclass
 import logging
 import time
+import re
 
 from app.core.retrieval.rerank import RerankResult
 from app.core.generation.llm_client import get_llm_client
@@ -80,7 +81,8 @@ class AnswerGenerator:
     def build_prompt(
         self,
         query: str,
-        chunks: List[RerankResult]
+        chunks: List[RerankResult],
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
         构建生成Prompt
@@ -88,6 +90,7 @@ class AnswerGenerator:
         Args:
             query: 用户问题
             chunks: 参考文档块列表（Top5~8）
+            history: 多轮对话历史，格式 [{"query": ..., "answer": ...}]，升序排列
 
         Returns:
             完整的prompt字符串
@@ -95,7 +98,6 @@ class AnswerGenerator:
         # 构建参考资料部分
         references = []
         for i, chunk in enumerate(chunks, 1):
-            # 来源标识
             source_parts = [f"[{i}]"]
             if chunk.standard_no:
                 source_parts.append(chunk.standard_no)
@@ -105,17 +107,16 @@ class AnswerGenerator:
                 source_parts.append(f"第{chunk.chapter}章")
 
             source_line = " ".join(source_parts)
-
-            # 内容
             content = chunk.content if chunk.content else ""
-
             references.append(f"{source_line}\n{content}")
 
         references_text = "\n\n".join(references)
 
-        # 构建完整prompt
+        # 构建对话历史段（按 token 预算截断）
+        history_section = self._build_history_section(history)
+
         prompt = f"""参考资料：
-{references_text}
+{references_text}{history_section}
 
 用户问题：
 {query}
@@ -123,7 +124,7 @@ class AnswerGenerator:
 请基于以上全部参考资料，对问题进行完整、专业的回答。要求：
 - 涉及分类、分级、限值等具体数据时，完整列出所有类别及对应的技术指标
 - 涉及多个方面时，每个方面都要展开说明
-- 对重要数据或条款，在句末标注来源编号[1][2]等
+- 引用资料时，严格使用上方标注的编号[1][2][3]等，不要自行创造或跳号
 - 不要简单摘抄原文，要理解后用专业语言综合表述
 - 如果参考资料中包含表格，表格中的分类和数值应当体现在答案中
 
@@ -131,11 +132,54 @@ class AnswerGenerator:
 
         return prompt
 
+    def _build_history_section(
+        self,
+        history: Optional[List[Dict[str, str]]],
+    ) -> str:
+        """
+        将对话历史转换为 prompt 中的历史段，并按 token 预算（MAX_HISTORY_TOKENS）截断。
+        从最旧轮次开始丢弃，优先保留最近轮次。
+        """
+        if not history:
+            return ""
+
+        from app.config import settings
+
+        # 截断每轮 answer，防止单轮过长
+        MAX_ANSWER_CHARS = 500
+        turns = [
+            {"query": h["query"], "answer": h["answer"][:MAX_ANSWER_CHARS]}
+            for h in history
+        ]
+
+        # 按 token 预算从旧到新丢弃（粗估：字符数 / 1.5）
+        token_budget = settings.MAX_HISTORY_TOKENS
+        while turns:
+            total_chars = sum(len(t["query"]) + len(t["answer"]) for t in turns)
+            estimated_tokens = int(total_chars / 1.5)
+            if estimated_tokens <= token_budget:
+                break
+            turns.pop(0)  # 丢弃最旧的一轮
+
+        if not turns:
+            return ""
+
+        lines = []
+        for t in turns:
+            lines.append(f"用户：{t['query']}")
+            lines.append(f"助手：{t['answer']}")
+
+        return (
+            "\n\n对话历史（仅供理解上下文，不作为答案依据）：\n"
+            + "\n".join(lines)
+        )
+
     async def generate(
         self,
         query: str,
         chunks: List[RerankResult],
-        stream: bool = False
+        stream: bool = False,
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> GenerationResult:
         """
         生成答案（非流式）
@@ -163,7 +207,7 @@ class AnswerGenerator:
 
         try:
             # 构建prompt
-            prompt = self.build_prompt(query, chunks)
+            prompt = self.build_prompt(query, chunks, history)
             logger.info(f"[AnswerGenerator] Prompt built, length={len(prompt)}")
 
             # 调用LLM生成答案
@@ -180,7 +224,7 @@ class AnswerGenerator:
 
             logger.info(f"[AnswerGenerator] Answer generated, length={len(answer)}")
 
-            # 提取引用
+            # 提取引用（保留答案里的 [1][2] 标记，用于前端点击跳转）
             citations = self.citation_extractor.extract(answer, chunks)
             logger.info(f"[AnswerGenerator] Extracted {len(citations)} citations")
 
@@ -221,7 +265,8 @@ class AnswerGenerator:
     async def generate_stream(
         self,
         query: str,
-        chunks: List[RerankResult]
+        chunks: List[RerankResult],
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> AsyncIterator[str]:
         """
         流式生成答案
@@ -239,7 +284,7 @@ class AnswerGenerator:
 
         try:
             # 构建prompt
-            prompt = self.build_prompt(query, chunks)
+            prompt = self.build_prompt(query, chunks, history)
 
             # 调用LLM流式生成
             messages = [

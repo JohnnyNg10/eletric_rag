@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getCurrentUser, login, logout } from '../api/auth';
+import { getCurrentUser, login, logout, refreshAccessToken } from '../api/auth';
 import { getErrorMessage } from '../api/client';
 import type { UserInfo } from '../types/auth';
 import {
@@ -11,6 +11,9 @@ import {
 } from '../utils/storage';
 
 const initialStoredAuth = getStoredAuth();
+
+// 定时刷新间隔：25分钟（token 过期时间 30 分钟，提前 5 分钟刷新）
+const TOKEN_REFRESH_INTERVAL = 25 * 60 * 1000;
 
 export function useAuth() {
   const [apiBaseUrl, setApiBaseUrlState] = useState(getStoredApiBaseUrl());
@@ -126,6 +129,32 @@ export function useAuth() {
       active = false;
     };
   }, [accessToken, persistAuth, refreshToken, user]);
+
+  // 定时刷新 token（已登录且有 refreshToken 时启动）
+  useEffect(() => {
+    if (!accessToken || !refreshToken || !user) {
+      return;
+    }
+
+    const timerId = setInterval(async () => {
+      try {
+        const response = await refreshAccessToken(refreshToken);
+        const newAccessToken = response.access_token;
+
+        setAccessToken(newAccessToken);
+        persistAuth(newAccessToken, refreshToken, user);
+
+        console.log('[useAuth] Token auto-refreshed');
+      } catch (refreshError) {
+        console.error('[useAuth] Auto-refresh failed:', refreshError);
+        // 刷新失败不强制登出，让 401 拦截器处理
+      }
+    }, TOKEN_REFRESH_INTERVAL);
+
+    return () => {
+      clearInterval(timerId);
+    };
+  }, [accessToken, refreshToken, user, persistAuth]);
 
   return {
     apiBaseUrl,

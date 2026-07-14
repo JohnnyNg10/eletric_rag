@@ -18,7 +18,7 @@ from app.db.models import Document, Chunk
 from app.schemas.retrieval import ChunkResult
 from app.storage.vector_store import VectorStore
 from app.storage.search_engine import SearchEngine
-from app.core.embedding.embedder import Embedder
+from app.core.embedding.embedder import get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class VectorRecall:
 
     def __init__(self):
         self.vector_store = VectorStore()
-        self.embedder = Embedder()
+        self.embedder = get_embedder()
 
     async def search(
         self,
@@ -611,57 +611,69 @@ class MultiPathRecall:
         Args:
             query: 标准化后的查询
             filters: 元数据过滤条件
-            expanded_queries: 扩展查询列表（快车道生成）
-            hyde_query: HyDE 生成的假设文档（可选，仅用于向量召回）
+            expanded_queries: 扩展查询列表（快车道生成），每个查询独立发起向量+关键词召回后 RRF 合并
+            hyde_query: HyDE 生成的假设文档（可选，仅用于原始 query 的向量召回）
 
         Returns:
             List[ChunkResult]: 去重后的 Top50 文档块
         """
         start_time = time.time()
-        logger.warning(f"[MultiPathRecall] START query='{query}', filters={filters}, hyde={bool(hyde_query)}")
-
-        # 步骤1: 三路并行召回
-        # 向量召回使用 HyDE query（如果提供），其他路径使用原 query
-        vector_query = hyde_query if hyde_query else query
-        vector_task = self.vector_recall.search(vector_query, filters, top_k=20)
-        keyword_task = self.keyword_recall.search(query, filters, top_k=20)
-        structured_task = self.structured_recall.search(query, filters, top_k=10)
-
-        # 等待所有任务完成
-        vector_chunks, keyword_chunks, structured_chunks = await asyncio.gather(
-            vector_task, keyword_task, structured_task
+        queries = expanded_queries if expanded_queries else [query]
+        logger.warning(
+            f"[MultiPathRecall] START query='{query}', "
+            f"expanded={len(queries)}, filters={filters}, hyde={bool(hyde_query)}"
         )
 
-        # 步骤2: 合并去重（按 chunk_id）
-        all_chunks = self._merge_deduplicate([
-            vector_chunks,
-            keyword_chunks,
-            structured_chunks
-        ])
+        # 步骤1: 所有查询并行发起向量+关键词召回
+        # - 第一个查询的向量召回使用 HyDE query（如果提供）
+        # - 其余扩展查询用原始文本做向量召回
+        # - 结构化召回只用 query（精确匹配，重复无意义）
+        all_tasks = []
+        task_labels = []
 
-        # 步骤3: 保留召回来源信息（用于后续分析）
-        chunk_id_to_sources = {}
-        for chunk in vector_chunks:
-            chunk_id_to_sources.setdefault(chunk.chunk_id, []).append("vector")
-        for chunk in keyword_chunks:
-            chunk_id_to_sources.setdefault(chunk.chunk_id, []).append("keyword")
-        for chunk in structured_chunks:
-            chunk_id_to_sources.setdefault(chunk.chunk_id, []).append("structured")
+        for i, q in enumerate(queries):
+            vec_q = hyde_query if (i == 0 and hyde_query) else q
+            all_tasks.append(self.vector_recall.search(vec_q, filters, top_k=20))
+            task_labels.append(("vector", q))
+            all_tasks.append(self.keyword_recall.search(q, filters, top_k=20))
+            task_labels.append(("keyword", q))
 
+        all_tasks.append(self.structured_recall.search(query, filters, top_k=10))
+        task_labels.append(("structured", query))
+
+        results = await asyncio.gather(*all_tasks)
+
+        # 步骤2: 按来源分类，统计数量
+        chunk_lists = []
+        source_counts: Dict[str, int] = {}
+        chunk_id_to_sources: Dict[int, List[str]] = {}
+
+        for (source_type, q), chunks in zip(task_labels, results):
+            chunk_lists.append(chunks)
+            source_counts[source_type] = source_counts.get(source_type, 0) + len(chunks)
+            for chunk in chunks:
+                chunk_id_to_sources.setdefault(chunk.chunk_id, []).append(source_type)
+
+        # 步骤3: RRF 合并去重
+        all_chunks = self._merge_deduplicate(chunk_lists)
+
+        # 步骤4: 保留召回来源信息（用于后续分析）
         for chunk in all_chunks:
             sources = chunk_id_to_sources.get(chunk.chunk_id, [])
-            chunk.recall_sources = sources
-            if len(sources) > 1:
-                chunk.recall_source = "+".join(sources)
+            chunk.recall_sources = list(dict.fromkeys(sources))  # 去重保序
+            if len(set(sources)) > 1:
+                chunk.recall_source = "+".join(dict.fromkeys(sources))
 
-        # 步骤4: 返回 Top50
+        # 步骤5: 返回 Top50
         final_chunks = all_chunks[:50]
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.warning(
-            f"[MultiPathRecall] Done {elapsed_ms}ms | "
-            f"vector={len(vector_chunks)}, keyword={len(keyword_chunks)}, "
-            f"structured={len(structured_chunks)} → merged={len(all_chunks)} → top50={len(final_chunks)}"
+            f"[MultiPathRecall] Done {elapsed_ms}ms | queries={len(queries)} "
+            f"vector={source_counts.get('vector', 0)}, "
+            f"keyword={source_counts.get('keyword', 0)}, "
+            f"structured={source_counts.get('structured', 0)} "
+            f"→ merged={len(all_chunks)} → top50={len(final_chunks)}"
         )
 
         return final_chunks

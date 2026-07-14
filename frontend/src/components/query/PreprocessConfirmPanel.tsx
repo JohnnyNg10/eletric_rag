@@ -78,15 +78,9 @@ export default function PreprocessConfirmPanel({
       aria-labelledby="confirm-title"
     >
       <div className="panel-header-row">
-        <div>
-          <div className="panel-eyebrow">第一次请求结果</div>
-          <h2 className="panel-title" id="confirm-title">
-            请确认系统建议后继续查询
-          </h2>
-        </div>
-        {typeof preprocessResult.preprocessing_time === 'number' ? (
-          <span className="meta-pill">预处理 {preprocessResult.preprocessing_time}ms</span>
-        ) : null}
+        <h2 className="panel-title" id="confirm-title">
+          请确认查询信息
+        </h2>
       </div>
 
       <div className="confirm-grid">
