@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     CACHE_RERANK_TTL: int = 14400          # L3 TTL，默认 4h
     CACHE_GENERATION_TTL: int = 7200       # L4 TTL，默认 2h
 
+    # Semantic Cache（语义缓存，基于向量相似度）
+    SEMANTIC_CACHE_ENABLED: bool = True    # 是否启用语义缓存
+    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.95  # 相似度阈值（0.9-0.99）
+    SEMANTIC_CACHE_TTL_HOURS: int = 6      # 语义缓存 TTL（小时）
+
     # Multi-turn Conversation（多轮对话）
     MAX_HISTORY_TURNS: int = 5               # 历史注入轮数上限
     MAX_HISTORY_TOKENS: int = 2000           # 历史 token 预算（按字符数 /1.5 粗估）

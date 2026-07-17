@@ -40,7 +40,7 @@ async def startup_event():
     logger.info("Starting application...")
 
     # 1. 初始化AI模型（检查并下载）
-    logger.info("Step 1/2: Initializing AI models...")
+    logger.info("Step 1/3: Initializing AI models...")
     from app.core.model_init import init_models
 
     try:
@@ -53,7 +53,7 @@ async def startup_event():
         logger.warning("Continuing startup without models. Please check model configuration.")
 
     # 2. 检查数据库连接
-    logger.info("Step 2/2: Checking database connection...")
+    logger.info("Step 2/3: Checking database connection...")
     if not check_db_connection():
         logger.error("Database connection failed! Please check your MySQL configuration.")
         logger.error(f"Connection string: {settings.DATABASE_URL.replace(settings.MYSQL_PASSWORD, '***')}")
@@ -68,6 +68,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise
+
+    # 3. 预加载重排模型（避免首次请求承担模型加载延迟）
+    logger.info("Step 3/3: Warming up reranker models...")
+    try:
+        from app.core.retrieval.rerank import get_reranker
+        get_reranker()
+        logger.info("Reranker models loaded successfully")
+    except Exception as e:
+        logger.warning(f"Reranker warmup failed (non-fatal): {e}")
 
     logger.info("Application started successfully")
 

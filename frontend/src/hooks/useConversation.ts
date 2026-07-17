@@ -32,8 +32,10 @@ interface QueryExecutionSnapshot {
   query: string;
   preprocess: PreprocessResponse;
   refinedQuery: string | null;
+  customRefinement: string;  // [方案C]
   selectedOptionId: number | null;
   userLane: Lane | null;
+  cacheStrategy: 'exact' | 'semantic';
 }
 
 function buildFallbackPreprocess(snapshot: QueryExecutionSnapshot, response: any) {
@@ -56,12 +58,15 @@ export function useConversation({ accessToken }: { accessToken: string }) {
   const [preprocessResult, setPreprocessResult] = useState<PreprocessResponse | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null);
   const [refinedQuery, setRefinedQuery] = useState<string | null>(null);
+  const [customRefinement, setCustomRefinement] = useState<string>('');  // [方案C]
   const [userLane, setUserLane] = useState<Lane | null>(null);
+  const [cacheStrategy, setCacheStrategy] = useState<'exact' | 'semantic'>('exact');
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<'preprocess' | 'query' | null>(null);
   const [timeoutNotice, setTimeoutNotice] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [conversationListRefreshTrigger, setConversationListRefreshTrigger] = useState(0);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const preprocessCacheRef = useRef(new Map<string, PreprocessResponse>());
@@ -183,6 +188,7 @@ export function useConversation({ accessToken }: { accessToken: string }) {
     setPreprocessResult(null);
     setSelectedOptionId(null);
     setRefinedQuery(null);
+    setCustomRefinement('');  // [方案C]
     setUserLane(null);
     setWarning(null);
     setError(null);
@@ -231,20 +237,24 @@ export function useConversation({ accessToken }: { accessToken: string }) {
       }, 150000);
 
       try {
-        if (!conversationId) {
-          const newId = crypto.randomUUID();
-          setConversationId(newId);
+        // 如果是新会话，立即生成conversation_id
+        let currentConversationId = conversationId;
+        if (!currentConversationId) {
+          currentConversationId = crypto.randomUUID();
+          setConversationId(currentConversationId);
         }
 
         const response = await executeQuery(
           {
             query: snapshot.query,
-            conversation_id: conversationId || undefined,
+            conversation_id: currentConversationId,
             stream: true,
             refined_query: snapshot.refinedQuery,
+            custom_refinement: snapshot.customRefinement || null,  // [方案C]
             selected_option_id: snapshot.selectedOptionId,
             user_lane: snapshot.userLane,
             clarification_context: buildClarificationContext(snapshot.preprocess),
+            cache_strategy: snapshot.cacheStrategy,
           },
           {
             token: accessToken,
@@ -270,6 +280,8 @@ export function useConversation({ accessToken }: { accessToken: string }) {
                 }
                 return updated;
               });
+              // 查询完成后刷新会话列表
+              setConversationListRefreshTrigger(Date.now());
             },
             onMeta: (meta) => {
               setMessages((prev) => {
@@ -293,8 +305,12 @@ export function useConversation({ accessToken }: { accessToken: string }) {
           setMessages((prev) => prev.slice(0, -1));
           const fallbackPreprocess = buildFallbackPreprocess(snapshot, response);
           setPreprocessResult(fallbackPreprocess);
-          setSelectedOptionId(null);
-          setRefinedQuery(null);
+          // 保留用户已选择的澄清结果
+          // 如果用户之前未选择任何选项，将 normalized_query 作为 refined_query 传递
+          if (!snapshot.refinedQuery && !snapshot.customRefinement && fallbackPreprocess.normalized_query) {
+            setRefinedQuery(fallbackPreprocess.normalized_query);
+          }
+          // selectedOptionId 和 customRefinement 保持不变
           setUserLane(null);
           setWarning(buildVaguenessWarning(fallbackPreprocess));
           setError(null);
@@ -334,8 +350,12 @@ export function useConversation({ accessToken }: { accessToken: string }) {
   const handlePreprocessReady = useCallback(
     async (query: string, result: PreprocessResponse) => {
       setPreprocessResult(result);
+
+      // 默认选中"跳过，使用原始查询"，用户可直接点继续提问
       setSelectedOptionId(null);
-      setRefinedQuery(null);
+      setRefinedQuery(query);
+      setCustomRefinement('');  // [方案C]
+
       setUserLane(null);
       setWarning(buildVaguenessWarning(result));
       setError(null);
@@ -345,9 +365,11 @@ export function useConversation({ accessToken }: { accessToken: string }) {
         await executeConfirmedQuery({
           query,
           preprocess: result,
-          refinedQuery: null,
+          refinedQuery: query,
+          customRefinement: '',  // [方案C]
           selectedOptionId: null,
           userLane: null,
+          cacheStrategy,
         });
         return;
       }
@@ -393,6 +415,7 @@ export function useConversation({ accessToken }: { accessToken: string }) {
       setPreprocessResult(null);
       setSelectedOptionId(null);
       setRefinedQuery(null);
+      setCustomRefinement('');  // [方案C]
       setUserLane(null);
       setError(null);
       setErrorSource(null);
@@ -438,8 +461,10 @@ export function useConversation({ accessToken }: { accessToken: string }) {
     const requiresSelection =
       preprocessResult.strategy === 'clarify_required' && preprocessResult.options.length > 0;
 
-    if (requiresSelection && selectedOptionId === null && refinedQuery === null) {
-      setError('请选择一个具体场景后再提交查询');
+    const hasCustomInput = customRefinement.trim().length > 0;
+
+    if (requiresSelection && selectedOptionId === null && refinedQuery === null && !hasCustomInput) {
+      setError('请选择一个具体场景或输入自定义内容后再提交查询');
       setErrorSource('preprocess');
       setState('confirming');
       return;
@@ -449,10 +474,12 @@ export function useConversation({ accessToken }: { accessToken: string }) {
       query: originalQuery,
       preprocess: preprocessResult,
       refinedQuery,
+      customRefinement,  // [方案C]
       selectedOptionId,
       userLane,
+      cacheStrategy,
     });
-  }, [executeConfirmedQuery, originalQuery, preprocessResult, refinedQuery, selectedOptionId, userLane]);
+  }, [executeConfirmedQuery, originalQuery, preprocessResult, refinedQuery, customRefinement, selectedOptionId, userLane]);
 
   const retryLastExecution = useCallback(async () => {
     if (lastExecutionRef.current) {
@@ -478,12 +505,26 @@ export function useConversation({ accessToken }: { accessToken: string }) {
   const selectOption = useCallback((optionId: number | null, nextRefinedQuery: string | null) => {
     setSelectedOptionId(optionId);
     setRefinedQuery(nextRefinedQuery);
+    if (optionId !== null) {
+      // [方案C] 选择系统选项时，清空自定义输入
+      setCustomRefinement('');
+    }
     setError(null);
     setErrorSource(null);
     if (state === 'error' && preprocessResult) {
       setState('confirming');
     }
   }, [preprocessResult, state]);
+
+  // [方案C] 自定义输入回调
+  const handleCustomInput = useCallback((input: string) => {
+    setCustomRefinement(input);
+    if (input.trim()) {
+      // 有自定义输入时，清空系统选项
+      setSelectedOptionId(null);
+      setRefinedQuery(null);
+    }
+  }, []);
 
   const cancelConfirmation = useCallback(() => {
     cancelActiveRequest();
@@ -494,6 +535,7 @@ export function useConversation({ accessToken }: { accessToken: string }) {
     setErrorSource(null);
     setSelectedOptionId(null);
     setRefinedQuery(null);
+    setCustomRefinement('');  // [方案C]
     setUserLane(null);
   }, [cancelActiveRequest]);
 
@@ -511,20 +553,25 @@ export function useConversation({ accessToken }: { accessToken: string }) {
     preprocessResult,
     selectedOptionId,
     refinedQuery,
+    customRefinement,  // [方案C]
     userLane,
+    cacheStrategy,
     warning,
     error,
     errorSource,
     timeoutNotice,
     isLoadingHistory,
     isBusy: state === 'preprocessing' || state === 'querying',
+    conversationListRefreshTrigger,
     sendQuery,
     confirmAndExecute,
     retryLastExecution,
     toggleLane,
     selectOption,
+    handleCustomInput,  // [方案C]
     cancelConfirmation,
     loadConversation,
     startNewConversation,
+    setCacheStrategy,
   };
 }

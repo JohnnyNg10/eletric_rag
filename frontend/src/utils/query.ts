@@ -74,7 +74,7 @@ export function shouldAutoSubmit(result: PreprocessResponse) {
 
 export function buildVaguenessWarning(result: PreprocessResponse) {
   if (result.vagueness_score <= 0.8 || result.missing_dimensions.length === 0) {
-    return null;
+    return '✓ 问题清晰，可直接查询';
   }
 
   const labels = result.missing_dimensions.map((item) => DIMENSION_LABELS[item] ?? item);
@@ -87,6 +87,9 @@ export function buildClarificationContext(result: PreprocessResponse): Clarifica
     strategy: result.strategy,
     missing_dimensions: result.missing_dimensions,
     options: result.options,
+    lane_suggestion: result.lane_suggestion.lane,
+    lane_confidence: result.lane_suggestion.confidence,
+    lane_reason: result.lane_suggestion.reason,
   };
 }
 

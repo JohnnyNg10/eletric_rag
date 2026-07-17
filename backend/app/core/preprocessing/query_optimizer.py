@@ -285,7 +285,15 @@ class QueryOptimizer:
         )
 
         # 决策策略
-        if vagueness_score > 0.7:
+        # 修正：如果 LLM 没有生成澄清选项（raw_options为空），即使笼统度较高也不触发澄清
+        # 这避免了"笼统但无法生成有效澄清"的情况下强制弹出空白澄清卡片
+        if not raw_options:
+            # 没有澄清选项时，根据笼统度决定是否建议用户补充信息（但不强制澄清）
+            if vagueness_score > 0.5:
+                strategy = "suggest"  # 建议模式，不弹澄清卡片
+            else:
+                strategy = "none"
+        elif vagueness_score > 0.7:
             strategy = "clarify_required"
         elif vagueness_score > 0.5:
             strategy = "clarify_optional"

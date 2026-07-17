@@ -11,6 +11,7 @@
 """
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+import asyncio
 import logging
 import re
 import time
@@ -22,6 +23,7 @@ from app.core.retrieval.rerank import TwoStageReranker, RerankResult, get_rerank
 from app.core.retrieval.sufficiency import SufficiencyChecker, SufficiencyResult, get_sufficiency_checker
 from app.core.retrieval.hyde import get_hyde_generator
 from app.core.retrieval.reference_extractor import get_reference_extractor
+from app.core.generation.llm_client import get_llm_client
 from app.schemas.retrieval import ChunkResult, ExpandedChunkResult
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,9 @@ class FastLane:
         # 跨标准引用提取器
         self.reference_extractor = get_reference_extractor()
 
+        # LLM 客户端（用于 gap 改写）
+        self.llm_client = get_llm_client()
+
         # 数据库会话（用于召回层）
         self.db = db
 
@@ -114,12 +119,10 @@ class FastLane:
 
         logger.info(f"[FastLane] Start processing: {query}")
 
-        # 步骤1: 查询增强（查询改写 + 元数据提取）
-        expanded_queries = await self._enhance_query(query, strategy_params)
-        filters = self._extract_metadata(query, preprocessing_result)  # 传递预处理结果
-        metadata = self.metadata_extractor.extract_all_metadata(query, preprocessing_result)  # 传递预处理结果
+        # 步骤1: 元数据提取（同步，为 HyDE 提供 category）
+        filters = self._extract_metadata(query, preprocessing_result)
+        metadata = self.metadata_extractor.extract_all_metadata(query, preprocessing_result)
 
-        logger.info(f"[FastLane] Expanded queries: {expanded_queries}")
         logger.info(f"[FastLane] Filters: {filters}")
         logger.info(f"[FastLane] Metadata: {metadata}")
 
@@ -128,19 +131,43 @@ class FastLane:
         filters_relaxed = False
         final_filters = filters
 
-        # 步骤1.5: 可选的类别特定 HyDE 生成
-        hyde_query = None
-        enable_hyde = strategy_params.get("enable_hyde", False)
-        if enable_hyde:
-            category = metadata.get('category')
-            hyde_query = await self.hyde_generator.generate(query, category)
-            logger.info(f"[FastLane] HyDE enabled, category={category}, hyde_query={hyde_query[:50]}...")
+        # 步骤1.5: 查询拆解（快车道只拆同主题多方面查询；对比/差异类交给慢车道）
+        enable_decompose = strategy_params.get("enable_decompose", True)
+        if enable_decompose and self.query_rewriter.is_multi_aspect_query(query) and not self.query_rewriter.is_comparison_query(query):
+            sub_queries = await self.query_rewriter.decompose(query)
+        else:
+            sub_queries = [query]
+        if len(sub_queries) > 1:
+            logger.info(f"[FastLane] Query decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
 
-        # 步骤2: 三路并行召回（向量召回使用 HyDE query，支持过滤放宽）
-        recalled_chunks, filters_relaxed, final_filters = await self._recall_with_filter_relaxation(
+        # 步骤2: 查询扩展与 HyDE 并行执行
+        enable_hyde = strategy_params.get("enable_hyde", False)
+        category = metadata.get('category')
+
+        if enable_hyde:
+            # 并行执行查询扩展和HyDE生成
+            expanded_queries, hyde_query = await asyncio.gather(
+                self._enhance_query(sub_queries[0], strategy_params),
+                self.hyde_generator.generate(query, category)
+            )
+            logger.info(f"[FastLane] HyDE enabled (parallel), category={category}, hyde_query={hyde_query[:50]}...")
+        else:
+            expanded_queries = await self._enhance_query(sub_queries[0], strategy_params)
+            hyde_query = None
+
+        # 子查询扩展：将其余子查询追加到扩展列表（去重）
+        for sq in sub_queries[1:]:
+            if sq not in expanded_queries:
+                expanded_queries.append(sq)
+
+        logger.info(f"[FastLane] Final expanded queries: {expanded_queries}")
+
+        # 步骤3: 三路并行召回（HyDE期间非向量召回已并行启动）
+        recalled_chunks, filters_relaxed, final_filters = await self._recall_with_filter_relaxation_optimized(
             expanded_queries,
             filters,
-            hyde_query=hyde_query
+            hyde_query=hyde_query,
+            enable_hyde=enable_hyde
         )
         logger.info(f"[FastLane] Recalled {len(recalled_chunks)} chunks (filters_relaxed={filters_relaxed})")
 
@@ -154,7 +181,8 @@ class FastLane:
         cache = get_cache_manager()
         chunk_ids = [c.chunk_id for c in deduped_chunks]
 
-        cached_rerank = cache.get_rerank(query, chunk_ids)
+        _mv = self.reranker._model_version
+        cached_rerank = cache.get_rerank(query, chunk_ids, top_k=8, model_version=_mv)
         if cached_rerank is not None:
             logger.info(f"[FastLane] L3 rerank cache hit: query={query[:30]!r}")
             reranked_results = [RerankResult(**r) for r in cached_rerank]
@@ -164,7 +192,7 @@ class FastLane:
                 candidates=deduped_chunks,
                 top_k=8
             )
-            cache.set_rerank(query, chunk_ids, [asdict(r) for r in reranked_results])
+            cache.set_rerank(query, chunk_ids, [asdict(r) for r in reranked_results], top_k=8, model_version=_mv)
         logger.info(f"[FastLane] Reranked to Top{len(reranked_results)}")
 
         # 步骤4: 充分性判断
@@ -211,12 +239,29 @@ class FastLane:
             # 内容去重（同首次召回一样）
             merged_chunks = self._deduplicate_candidates(merged_chunks)
 
-            # 重新精排（Top10，比正常多2个）
-            reranked_results = await self.reranker.rerank(
-                query=query,
-                candidates=merged_chunks,
-                top_k=10
-            )
+            # 检测是否有新 chunk：无新 chunk 则直接复用首轮重排结果，跳过二次重排
+            original_ids = {c.chunk_id for c in deduped_chunks}
+            new_in_retry = [c for c in merged_chunks if c.chunk_id not in original_ids]
+
+            if not new_in_retry:
+                logger.info("[FastLane] Retry brought no new chunks, reusing first-pass rerank results")
+                reranked_results = reranked_results[:10]
+            else:
+                logger.info(f"[FastLane] Retry brought {len(new_in_retry)} new chunks, re-ranking merged set")
+                # 走 L3 整体缓存（有新 chunk 时 chunk_ids 已变化，必然 miss，但写入后下次可命中）
+                retry_chunk_ids = [c.chunk_id for c in merged_chunks]
+                cached_retry_rerank = cache.get_rerank(query, retry_chunk_ids, top_k=10, model_version=_mv)
+                if cached_retry_rerank is not None:
+                    logger.info("[FastLane] L3 retry rerank cache hit")
+                    reranked_results = [RerankResult(**r) for r in cached_retry_rerank]
+                else:
+                    # 老 chunk 的分数已由 rerank.py chunk 级缓存覆盖，只有新 chunk 真正跑推理
+                    reranked_results = await self.reranker.rerank(
+                        query=query,
+                        candidates=merged_chunks,
+                        top_k=10
+                    )
+                    cache.set_rerank(query, retry_chunk_ids, [asdict(r) for r in reranked_results], top_k=10, model_version=_mv)
             logger.info(f"[FastLane] Retry reranked to Top{len(reranked_results)}")
 
             retry_triggered = True
@@ -309,6 +354,89 @@ class FastLane:
         # 传递预处理结果给 MetadataExtractor
         return self.metadata_extractor.extract(query, preprocessing_result)
 
+    async def _multi_path_recall_optimized(
+        self,
+        queries: List[str],
+        filters: Dict[str, Any],
+        hyde_query: Optional[str] = None,
+        enable_hyde: bool = False
+    ) -> List[ChunkResult]:
+        """
+        优化版三路并行召回：HyDE期间并行执行keyword和structured召回
+
+        Args:
+            queries: 扩展查询列表
+            filters: 元数据过滤条件
+            hyde_query: HyDE 生成的假设文档（可选，仅用于向量召回）
+            enable_hyde: 是否启用HyDE（用于缓存key）
+
+        Returns:
+            List[ChunkResult]: Top50候选块
+        """
+        if not self.db:
+            logger.warning("[FastLane] No DB session, returning empty recall")
+            return []
+
+        # L2 召回缓存
+        from app.storage.cache import get_cache_manager
+        cache = get_cache_manager()
+        main_query = queries[0] if queries else ""
+        hyde_enabled = bool(hyde_query)
+
+        # 将扩展查询列表传入缓存 key
+        expanded_queries_for_cache = queries[1:] if len(queries) > 1 else None
+
+        cached_recall = cache.get_recall(main_query, filters, hyde_enabled, expanded_queries_for_cache)
+        if cached_recall is not None:
+            logger.info(f"[FastLane] L2 recall cache hit: query={main_query[:30]!r}, hyde={hyde_enabled}")
+            return [ChunkResult(**r) for r in cached_recall]
+
+        # 懒加载召回引擎
+        if self._recall_engine is None:
+            from app.core.retrieval.recall import MultiPathRecall
+            self._recall_engine = MultiPathRecall(self.db)
+
+        # 优化：如果启用HyDE，先并行执行非向量召回
+        if enable_hyde and hyde_query:
+            # 立即启动keyword和structured召回（不依赖HyDE）
+            keyword_tasks = []
+            structured_task = None
+
+            for q in queries:
+                keyword_tasks.append(self._recall_engine.keyword_recall.search(q, filters, top_k=20))
+
+            structured_task = self._recall_engine.structured_recall.search(main_query, filters, top_k=10)
+
+            # 同时启动向量召回（使用HyDE query）
+            vector_tasks = []
+            for i, q in enumerate(queries):
+                vec_q = hyde_query if i == 0 else q
+                vector_tasks.append(self._recall_engine.vector_recall.search(vec_q, filters, top_k=20))
+
+            # 等待所有召回完成
+            keyword_results = await asyncio.gather(*keyword_tasks)
+            structured_results = await structured_task
+            vector_results = await asyncio.gather(*vector_tasks)
+
+            # 合并所有结果
+            all_chunk_lists = list(vector_results) + list(keyword_results) + [structured_results]
+            recalled_chunks = self._recall_engine._merge_deduplicate(all_chunk_lists)
+
+            logger.info(f"[FastLane] Optimized recall: vector={sum(len(r) for r in vector_results)}, "
+                       f"keyword={sum(len(r) for r in keyword_results)}, structured={len(structured_results)}, "
+                       f"merged={len(recalled_chunks)}")
+        else:
+            # 非HyDE模式，使用原有逻辑
+            recalled_chunks = await self._recall_engine.recall(
+                query=main_query,
+                filters=filters,
+                expanded_queries=queries,
+                hyde_query=hyde_query
+            )
+
+        cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks], hyde_enabled, expanded_queries_for_cache)
+        return recalled_chunks
+
     async def _multi_path_recall(
         self,
         queries: List[str],
@@ -336,7 +464,10 @@ class FastLane:
         main_query = queries[0] if queries else ""
         hyde_enabled = bool(hyde_query)
 
-        cached_recall = cache.get_recall(main_query, filters, hyde_enabled)
+        # 将扩展查询列表传入缓存 key
+        expanded_queries_for_cache = queries[1:] if len(queries) > 1 else None
+
+        cached_recall = cache.get_recall(main_query, filters, hyde_enabled, expanded_queries_for_cache)
         if cached_recall is not None:
             logger.info(f"[FastLane] L2 recall cache hit: query={main_query[:30]!r}, hyde={hyde_enabled}")
             return [ChunkResult(**r) for r in cached_recall]
@@ -354,8 +485,49 @@ class FastLane:
             hyde_query=hyde_query
         )
 
-        cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks], hyde_enabled)
+        cache.set_recall(main_query, filters, [c.model_dump() for c in recalled_chunks], hyde_enabled, expanded_queries_for_cache)
         return recalled_chunks
+
+    async def _recall_with_filter_relaxation_optimized(
+        self,
+        queries: List[str],
+        filters: Dict[str, Any],
+        hyde_query: Optional[str] = None,
+        enable_hyde: bool = False
+    ) -> tuple[List[ChunkResult], bool, Dict[str, Any]]:
+        """
+        优化版三路召回：HyDE期间并行执行非向量召回
+
+        Returns:
+            (召回块, 是否放宽过滤, 最终过滤条件)
+        """
+        # 初次召回（优化版）
+        recalled_chunks = await self._multi_path_recall_optimized(queries, filters, hyde_query, enable_hyde)
+
+        # 判断是否需要放宽过滤
+        if len(recalled_chunks) >= self.filter_relaxation_threshold or not filters:
+            return recalled_chunks, False, filters
+
+        logger.warning(f"[FastLane] Low recall ({len(recalled_chunks)} < {self.filter_relaxation_threshold}), attempting filter relaxation")
+
+        relaxed_filters = filters.copy()
+        for filter_key in self.filter_relaxation_priority:
+            if filter_key not in relaxed_filters:
+                continue
+
+            dropped_value = relaxed_filters.pop(filter_key)
+            logger.info(f"[FastLane] Relaxing filter: {filter_key}={dropped_value}")
+
+            # 重试召回（使用优化版）
+            retry_chunks = await self._multi_path_recall_optimized(queries, relaxed_filters, hyde_query, enable_hyde)
+
+            if len(retry_chunks) >= self.filter_relaxation_threshold:
+                logger.info(f"[FastLane] Filter relaxation successful: {len(retry_chunks)} chunks (removed {filter_key})")
+                return retry_chunks, True, relaxed_filters
+
+        # 全部放宽仍不足，返回最后结果
+        logger.warning(f"[FastLane] Filter relaxation exhausted, final recall: {len(retry_chunks)} chunks")
+        return retry_chunks, True, relaxed_filters
 
     async def _recall_with_filter_relaxation(
         self,
@@ -364,7 +536,7 @@ class FastLane:
         hyde_query: Optional[str] = None
     ) -> tuple[List[ChunkResult], bool, Dict[str, Any]]:
         """
-        三路召回，支持低召回时自动放宽过滤条件
+        三路召回，支持低召回时自动放宽过滤条件（旧版，保留兼容性）
 
         Returns:
             (召回块, 是否放宽过滤, 最终过滤条件)
@@ -417,6 +589,69 @@ class FastLane:
         if not gaps:
             return original_query
 
+        # 使用 LLM 智能改写查询
+        try:
+            # 构造提示词
+            gaps_text = "、".join(gaps)
+            standards_hint = ""
+            if referenced_standards:
+                standards_hint = f"\n相关标准：{', '.join(referenced_standards)}"
+
+            prompt = f"""原始查询：{original_query}
+信息缺口：{gaps_text}{standards_hint}
+
+请基于原始查询和信息缺口，生成一个更完整的检索查询。要求：
+1. 保持简洁（30字以内）
+2. 融合原查询的核心意图和缺口信息
+3. 如果提供了相关标准，自然融入标准号
+4. 只输出改写后的查询，不要解释
+
+改写查询："""
+
+            messages = [
+                {"role": "system", "content": "你是一个专业的电力领域查询改写助手，擅长将用户意图和信息缺口融合为精准的检索查询。"},
+                {"role": "user", "content": prompt}
+            ]
+
+            refined = self.llm_client.chat(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=100
+            )
+
+            refined_query = refined.strip()
+
+            # 验证改写结果
+            if refined_query and len(refined_query) <= 100:
+                logger.info(f"[FastLane] Gap-refined query: {original_query} -> {refined_query}")
+                return refined_query
+            else:
+                logger.warning(f"[FastLane] LLM refinement invalid, falling back to concatenation")
+                # 降级：拼接方式
+                return self._fallback_refine_query(original_query, gaps, referenced_standards)
+
+        except Exception as e:
+            logger.error(f"[FastLane] Gap refinement error: {e}, falling back to concatenation")
+            # 降级：拼接方式
+            return self._fallback_refine_query(original_query, gaps, referenced_standards)
+
+    def _fallback_refine_query(
+        self,
+        original_query: str,
+        gaps: List[str],
+        referenced_standards: Optional[List[str]] = None
+    ) -> str:
+        """
+        降级方案：简单拼接（当LLM调用失败时）
+
+        Args:
+            original_query: 原始查询
+            gaps: 信息缺口列表
+            referenced_standards: 被引用标准号列表
+
+        Returns:
+            拼接后的查询
+        """
         # 如果检测到被引用标准，优先构造针对性查询
         if referenced_standards:
             # 从 gaps 中提取用户真正关心的内容（去掉"缺少XX标准"的描述）

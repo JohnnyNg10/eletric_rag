@@ -51,6 +51,7 @@ export function SearchPage() {
         activeConversationId={conversation.conversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        refreshTrigger={conversation.conversationListRefreshTrigger}
       />
 
       <div className="chat-main">
@@ -60,6 +61,23 @@ export function SearchPage() {
         />
 
         <div className="chat-input-area">
+          <div className="cache-strategy-bar">
+            <span className="cache-strategy-label">缓存策略</span>
+            <button
+              className={`cache-strategy-btn${conversation.cacheStrategy === 'exact' ? ' active' : ''}`}
+              onClick={() => conversation.setCacheStrategy('exact')}
+              title="精确匹配：仅当查询完全一致时命中缓存"
+            >
+              精确
+            </button>
+            <button
+              className={`cache-strategy-btn${conversation.cacheStrategy === 'semantic' ? ' active' : ''}`}
+              onClick={() => conversation.setCacheStrategy('semantic')}
+              title="语义匹配：语义相似的查询也可命中缓存"
+            >
+              语义
+            </button>
+          </div>
           <QueryInput
             ref={inputRef}
             query={draftQuery}
@@ -80,10 +98,12 @@ export function SearchPage() {
             preprocessResult={conversation.preprocessResult}
             originalQuery={conversation.originalQuery}
             selectedOptionId={conversation.selectedOptionId}
+            customInput={conversation.customRefinement}  // [方案C]
             userLane={conversation.userLane}
             validationMessage={conversation.errorSource === 'preprocess' ? conversation.error : null}
             onToggleLane={conversation.toggleLane}
             onSelectOption={conversation.selectOption}
+            onCustomInput={conversation.handleCustomInput}  // [方案C]
             onConfirm={conversation.confirmAndExecute}
             onCancel={() => {
               conversation.cancelConfirmation();

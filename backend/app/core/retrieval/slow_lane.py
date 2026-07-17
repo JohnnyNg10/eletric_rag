@@ -11,7 +11,7 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 import logging
 import time
 import json
@@ -70,9 +70,9 @@ class SlowLane:
     """
 
     MAX_STEPS = 3
-    STEP_TIMEOUT_MS = 5000  # 增加到 5 秒，以适应向量检索的耗时
-    TOTAL_TIMEOUT_MS = 20000  # 增加到 20 秒
-    LLM_DECISION_TIMEOUT_MS = 10000  # 增加到 10 秒
+    STEP_TIMEOUT_MS = 120000   # 单步超时 2 分钟（含 LLM 决策 + 三路召回）
+    TOTAL_TIMEOUT_MS = 600000  # 总超时 10 分钟
+    LLM_DECISION_TIMEOUT_MS = 30000  # LLM 决策超时 30 秒
 
     def __init__(self, db: Session):
         """
@@ -116,12 +116,14 @@ class SlowLane:
 
         max_steps = strategy_params.get("max_steps", self.MAX_STEPS)
         total_timeout = strategy_params.get("total_timeout", self.TOTAL_TIMEOUT_MS)
+        step_timeout = strategy_params.get("step_timeout", self.STEP_TIMEOUT_MS) / 1000.0
 
         logger.info(f"[SlowLane] Start processing: {query}")
         logger.info(f"[SlowLane] Max steps: {max_steps}, Total timeout: {total_timeout}ms")
 
         reasoning_steps: List[ToolCallRecord] = []
         all_chunks: List[ChunkResult] = []
+        accumulated_metadata: List[Dict[str, Any]] = []  # 记录每步工具返回的元信息（含标准清单）
         steps_taken = 0
 
         # 工具调用循环（最多 max_steps 步）
@@ -138,7 +140,8 @@ class SlowLane:
                     query=query,
                     current_chunks=all_chunks,
                     step_number=step_idx + 1,
-                    remaining_steps=max_steps - step_idx
+                    remaining_steps=max_steps - step_idx,
+                    accumulated_metadata=accumulated_metadata
                 )
             except asyncio.TimeoutError:
                 logger.warning(f"[SlowLane] Step {step_idx + 1}: LLM decision timeout")
@@ -163,7 +166,7 @@ class SlowLane:
             try:
                 tool_result = await asyncio.wait_for(
                     self._call_tool(tool_name, tool_params),
-                    timeout=self.STEP_TIMEOUT_MS / 1000.0
+                    timeout=step_timeout
                 )
                 tool_elapsed_ms = int((time.time() - tool_start) * 1000)
                 timeout = False
@@ -176,6 +179,11 @@ class SlowLane:
             # 提取结果
             new_chunks = tool_result.get("chunks", [])
             all_chunks.extend(new_chunks)
+
+            # 保留元信息（list_related_standards 会返回标准清单，供下一步 LLM 决策使用）
+            step_meta = tool_result.get("metadata", {})
+            if step_meta:
+                accumulated_metadata.append({"step": step_idx + 1, "tool": tool_name, **step_meta})
 
             # 记录推理步骤
             record = ToolCallRecord(
@@ -199,6 +207,41 @@ class SlowLane:
         # 信息聚合与去重
         aggregated_chunks = self._aggregate_chunks(all_chunks)
 
+        # 两阶段重排（与快车道一致）
+        if aggregated_chunks:
+            try:
+                from app.core.retrieval.rerank import get_reranker
+                reranker = get_reranker()
+                reranked = await reranker.rerank(
+                    query=query,
+                    candidates=aggregated_chunks,
+                    top_k=min(10, len(aggregated_chunks))
+                )
+                # 将 RerankResult 转回 ChunkResult
+                final_chunks = []
+                for r in reranked:
+                    final_chunks.append(ChunkResult(
+                        chunk_id=r.chunk_id,
+                        content=r.content,
+                        document_id=r.document_id,
+                        score=r.score,
+                        standard_no=r.standard_no,
+                        doc_type=r.doc_type,
+                        category=r.category,
+                        voltage_level=r.voltage_level,
+                        clause=r.clause,
+                        chapter=r.chapter,
+                        section=r.section,
+                        page_start=r.page_start,
+                        page_end=r.page_end,
+                        recall_source=r.recall_source,
+                        document_title=r.document_title,
+                    ))
+                logger.info(f"[SlowLane] Reranked: {len(aggregated_chunks)} → {len(final_chunks)}")
+                aggregated_chunks = final_chunks
+            except Exception as e:
+                logger.error(f"[SlowLane] Rerank error: {e}, using aggregated scores")
+
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.info(f"[SlowLane] Completed in {elapsed_ms}ms, steps: {steps_taken}, chunks: {len(aggregated_chunks)}")
 
@@ -216,7 +259,8 @@ class SlowLane:
         query: str,
         current_chunks: List[ChunkResult],
         step_number: int,
-        remaining_steps: int
+        remaining_steps: int,
+        accumulated_metadata: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         LLM 决策下一步动作
@@ -271,12 +315,23 @@ class SlowLane:
 {"action": "sufficient"}  # 信息已充分
 """
 
+        # 构建已发现标准清单的提示（list_related_standards 的结果）
+        standards_hint = ""
+        if accumulated_metadata:
+            for meta in accumulated_metadata:
+                if meta.get("tool") == "list_related_standards" and meta.get("standards"):
+                    std_lines = [
+                        f"  - {s['standard_no']}: {s['title']}"
+                        for s in meta["standards"][:5]
+                    ]
+                    standards_hint = "\n\n已发现相关标准（可用于下一步 retrieve_standard 的 standard_ids）：\n" + "\n".join(std_lines)
+
         user_prompt = f"""原始问题：{query}
 
 当前步骤：第 {step_number} 步（还剩 {remaining_steps} 步可用）
 
 已获取信息：
-{context_summary}
+{context_summary}{standards_hint}
 
 请决策下一步操作。
 
@@ -496,9 +551,13 @@ class SlowLane:
                 Document.process_status == "completed"
             )
 
-            # 关键词过滤（标题或关键词字段）
+            # 关键词过滤（标题、关键词字段、摘要）
             query = query.filter(
-                Document.title.contains(keyword)
+                or_(
+                    Document.title.contains(keyword),
+                    Document.keywords.contains(keyword),
+                    Document.abstract.contains(keyword),
+                )
             )
 
             # 分类过滤

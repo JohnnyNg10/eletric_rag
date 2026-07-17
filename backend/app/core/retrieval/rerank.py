@@ -62,7 +62,7 @@ class TwoStageReranker:
         coarse_batch_size: int = 16,
         fine_batch_size: int = 8,
         enable_cache: bool = True,
-        cache_ttl: int = 300,
+        cache_ttl: int = settings.CACHE_RERANK_TTL,
     ):
         """
         初始化两阶段重排器
@@ -92,6 +92,10 @@ class TwoStageReranker:
         self.coarse_model_path = coarse_model_path or self._get_model_path(settings.RERANKER_MODEL_BASE)
         self.fine_model_path = fine_model_path or self._get_model_path(settings.RERANKER_MODEL_LARGE)
 
+        # 设备选择（优先GPU）
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info(f"[TwoStageReranker] Using device: {self.device}")
+
         # 延迟加载模型
         self.coarse_model = None
         self.coarse_tokenizer = None
@@ -99,6 +103,11 @@ class TwoStageReranker:
         self.fine_tokenizer = None
 
         self._load_models()
+
+    @property
+    def _model_version(self) -> str:
+        path = getattr(self.fine_model, 'name_or_path', '') or self.fine_model_path
+        return hashlib.md5(path.encode()).hexdigest()[:12]
 
     def _get_model_path(self, model_name: str) -> str:
         """获取本地模型路径"""
@@ -118,7 +127,8 @@ class TwoStageReranker:
             self.coarse_tokenizer = AutoTokenizer.from_pretrained(self.coarse_model_path)
             self.coarse_model = AutoModelForSequenceClassification.from_pretrained(self.coarse_model_path)
             self.coarse_model.eval()
-            logger.info("Coarse reranker loaded successfully")
+            self.coarse_model.to(self.device)
+            logger.info(f"Coarse reranker loaded successfully (device={self.device})")
 
         except Exception as e:
             logger.error(f"Failed to load coarse reranker: {e}")
@@ -133,7 +143,8 @@ class TwoStageReranker:
             self.fine_tokenizer = AutoTokenizer.from_pretrained(self.fine_model_path)
             self.fine_model = AutoModelForSequenceClassification.from_pretrained(self.fine_model_path)
             self.fine_model.eval()
-            logger.info("Fine reranker loaded successfully")
+            self.fine_model.to(self.device)
+            logger.info(f"Fine reranker loaded successfully (device={self.device})")
 
         except Exception as e:
             logger.error(f"Failed to load fine reranker: {e}")
@@ -343,22 +354,24 @@ class TwoStageReranker:
 
         for i in range(0, len(candidates), batch_size):
             batch = candidates[i:i + batch_size]
+
+            # 批量查询缓存（单次 roundtrip）
+            cache_keys = [
+                f"rerank:score:{stage}:{model_version}:{query_hash}:{c.chunk_id}"
+                for c in batch
+            ]
+            l35_enabled = self.enable_cache and settings.CACHE_RERANK_ENABLED
+            cached_values = cache.mget(cache_keys) if l35_enabled else [None] * len(batch)
+
+            # 识别需要计算的索引
             batch_scores = []
-
-            for candidate in batch:
-                # 尝试从缓存读取
-                if self.enable_cache:
-                    cache_key = f"rerank:score:{stage}:{model_version}:{query_hash}:{candidate.chunk_id}"
-                    cached_score = cache.get(cache_key)
-                    if cached_score is not None:
-                        batch_scores.append(float(cached_score))
-                        continue
-
-                # 缓存未命中，需要计算
-                batch_scores.append(None)
-
-            # 找出需要计算的索引
-            compute_indices = [i for i, score in enumerate(batch_scores) if score is None]
+            compute_indices = []
+            for idx, cached in enumerate(cached_values):
+                if cached is not None:
+                    batch_scores.append(float(cached))
+                else:
+                    batch_scores.append(None)
+                    compute_indices.append(idx)
 
             if compute_indices:
                 # 批量推理
@@ -374,6 +387,7 @@ class TwoStageReranker:
                         max_length=512,
                         return_tensors="pt"
                     )
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
                     # 推理
                     with torch.no_grad():
@@ -383,14 +397,15 @@ class TwoStageReranker:
                     # Sigmoid归一化到[0, 1]
                     normalized_scores = torch.sigmoid(logits).cpu().numpy().tolist()
 
-                    # 填充计算结果
+                    # 填充计算结果并批量写回缓存
+                    cache_writes = []
                     for idx, score in zip(compute_indices, normalized_scores):
                         batch_scores[idx] = float(score)
-
-                        # 写入缓存
                         if self.enable_cache:
-                            cache_key = f"rerank:score:{query_hash}:{batch[idx].chunk_id}"
-                            cache.set(cache_key, score, ttl=self.cache_ttl)
+                            cache_writes.append((cache_keys[idx], score, self.cache_ttl))
+
+                    if cache_writes and l35_enabled:
+                        cache.mset(cache_writes)
 
                 except Exception as e:
                     logger.error(f"[{stage}] Batch inference error: {e}")

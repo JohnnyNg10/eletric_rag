@@ -14,6 +14,7 @@ interface QueryExecutionSnapshot {
   query: string;
   preprocess: PreprocessResponse;
   refinedQuery: string | null;
+  customRefinement: string;  // [方案C]
   selectedOptionId: number | null;
   userLane: Lane | null;
 }
@@ -47,6 +48,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
   const [preprocessResult, setPreprocessResult] = useState<PreprocessResponse | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null);
   const [refinedQuery, setRefinedQuery] = useState<string | null>(null);
+  const [customRefinement, setCustomRefinement] = useState<string>('');  // [方案C]
   const [userLane, setUserLane] = useState<Lane | null>(null);
   const [answer, setAnswer] = useState('');
   const [citations, setCitations] = useState<Citation[]>([]);
@@ -139,6 +141,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
             query: snapshot.query,
             stream: true,
             refined_query: snapshot.refinedQuery,
+            custom_refinement: snapshot.customRefinement || null,  // [方案C]
             selected_option_id: snapshot.selectedOptionId,
             user_lane: snapshot.userLane,
             clarification_context: buildClarificationContext(snapshot.preprocess),
@@ -216,6 +219,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
           query,
           preprocess: result,
           refinedQuery: null,
+          customRefinement: '',  // [方案C]
           selectedOptionId: null,
           userLane: null,
         });
@@ -264,6 +268,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       setPreprocessResult(null);
       setSelectedOptionId(null);
       setRefinedQuery(null);
+      setCustomRefinement('');  // [方案C]
       setUserLane(null);
       setState('preprocessing');
 
@@ -306,8 +311,10 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     const requiresSelection =
       preprocessResult.strategy === 'clarify_required' && preprocessResult.options.length > 0;
 
-    if (requiresSelection && selectedOptionId === null && refinedQuery === null) {
-      setError('请选择一个具体场景后再提交查询');
+    const hasCustomInput = customRefinement.trim().length > 0;
+
+    if (requiresSelection && selectedOptionId === null && refinedQuery === null && !hasCustomInput) {
+      setError('请选择一个具体场景或输入自定义内容后再提交查询');
       setErrorSource('preprocess');
       setState('confirming');
       return;
@@ -317,10 +324,11 @@ export function useQuery({ accessToken }: { accessToken: string }) {
       query: originalQuery,
       preprocess: preprocessResult,
       refinedQuery,
+      customRefinement,  // [方案C]
       selectedOptionId,
       userLane,
     });
-  }, [executeConfirmedQuery, originalQuery, preprocessResult, refinedQuery, selectedOptionId, userLane]);
+  }, [executeConfirmedQuery, originalQuery, preprocessResult, refinedQuery, customRefinement, selectedOptionId, userLane]);
 
   const retryLastExecution = useCallback(async () => {
     if (lastExecutionRef.current) {
@@ -346,12 +354,26 @@ export function useQuery({ accessToken }: { accessToken: string }) {
   const selectOption = useCallback((optionId: number | null, nextRefinedQuery: string | null) => {
     setSelectedOptionId(optionId);
     setRefinedQuery(nextRefinedQuery);
+    if (optionId !== null) {
+      // [方案C] 选择系统选项时，清空自定义输入
+      setCustomRefinement('');
+    }
     setError(null);
     setErrorSource(null);
     if (state === 'error' && preprocessResult) {
       setState('confirming');
     }
   }, [preprocessResult, state]);
+
+  // [方案C] 自定义输入回调
+  const handleCustomInput = useCallback((input: string) => {
+    setCustomRefinement(input);
+    if (input.trim()) {
+      // 有自定义输入时，清空系统选项
+      setSelectedOptionId(null);
+      setRefinedQuery(null);
+    }
+  }, []);
 
   const cancelConfirmation = useCallback(() => {
     cancelActiveRequest();
@@ -373,6 +395,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     setPreprocessResult(null);
     setSelectedOptionId(null);
     setRefinedQuery(null);
+    setCustomRefinement('');  // [方案C]
     setUserLane(null);
     setWarning(null);
     lastExecutionRef.current = null;
@@ -390,6 +413,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     preprocessResult,
     selectedOptionId,
     refinedQuery,
+    customRefinement,  // [方案C]
     userLane,
     answer,
     citations,
@@ -404,6 +428,7 @@ export function useQuery({ accessToken }: { accessToken: string }) {
     retryLastExecution,
     toggleLane,
     selectOption,
+    handleCustomInput,  // [方案C]
     cancelConfirmation,
     resetConversation,
   };

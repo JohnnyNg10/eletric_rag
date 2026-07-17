@@ -40,6 +40,9 @@ export interface ClarificationContext {
   strategy: Strategy;
   missing_dimensions: string[];
   options: OptimizationOption[];
+  lane_suggestion?: Lane;
+  lane_confidence?: number;
+  lane_reason?: string;
 }
 
 export interface QueryExecutionRequest {
@@ -47,9 +50,11 @@ export interface QueryExecutionRequest {
   conversation_id?: string;
   stream?: boolean;
   refined_query?: string | null;
+  custom_refinement?: string | null;  // [方案C] 自定义补充
   selected_option_id?: number | null;
   user_lane?: Lane | null;
   clarification_context?: ClarificationContext;
+  cache_strategy?: 'exact' | 'semantic';
 }
 
 export interface Citation {

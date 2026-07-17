@@ -7,11 +7,13 @@ interface PreprocessConfirmPanelProps {
   preprocessResult: PreprocessResponse;
   originalQuery: string;
   selectedOptionId: number | null;
+  customInput: string;  // [方案C]
   userLane: Lane | null;
   validationMessage?: string | null;
   isSubmitting?: boolean;
   onToggleLane: () => void;
   onSelectOption: (optionId: number | null, refinedQuery: string | null) => void;
+  onCustomInput: (input: string) => void;  // [方案C]
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,11 +22,13 @@ export default function PreprocessConfirmPanel({
   preprocessResult,
   originalQuery,
   selectedOptionId,
+  customInput,  // [方案C]
   userLane,
   validationMessage,
   isSubmitting,
   onToggleLane,
   onSelectOption,
+  onCustomInput,  // [方案C]
   onConfirm,
   onCancel,
 }: PreprocessConfirmPanelProps) {
@@ -99,8 +103,10 @@ export default function PreprocessConfirmPanel({
             options={preprocessResult.options}
             strategy={preprocessResult.strategy}
             selectedId={selectedOptionId}
+            customInput={customInput}  // [方案C]
             originalQuery={originalQuery}
             onSelect={onSelectOption}
+            onCustomInput={onCustomInput}  // [方案C]
           />
         </div>
       </div>

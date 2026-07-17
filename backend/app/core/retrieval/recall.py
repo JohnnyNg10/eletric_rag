@@ -161,9 +161,17 @@ class VectorRecall:
 
         # 标准号过滤
         if 'standard_no' in filters:
-            conditions.append(
-                FieldCondition(key="standard_no", match=MatchValue(value=filters['standard_no']))
-            )
+            from qdrant_client.models import MatchAny
+            value = filters['standard_no']
+            if isinstance(value, list):
+                if value:
+                    conditions.append(
+                        FieldCondition(key="standard_no", match=MatchAny(any=value))
+                    )
+            elif value:
+                conditions.append(
+                    FieldCondition(key="standard_no", match=MatchValue(value=value))
+                )
 
         if conditions:
             return Filter(must=conditions)
@@ -305,7 +313,12 @@ class KeywordRecall:
 
         # 标准号过滤
         if 'standard_no' in filters:
-            es_filters.append({"term": {"standard_no": filters['standard_no']}})
+            value = filters['standard_no']
+            if isinstance(value, list):
+                if value:
+                    es_filters.append({"terms": {"standard_no": value}})
+            elif value:
+                es_filters.append({"term": {"standard_no": value}})
 
         return es_filters
 
@@ -560,7 +573,12 @@ class StructuredRecall:
             query = query.filter(Document.voltage_level == filters['voltage_level'])
 
         if 'standard_no' in filters:
-            query = query.filter(Document.standard_no == filters['standard_no'])
+            value = filters['standard_no']
+            if isinstance(value, list):
+                if value:
+                    query = query.filter(Document.standard_no.in_(value))
+            elif value:
+                query = query.filter(Document.standard_no == value)
 
         return query
 

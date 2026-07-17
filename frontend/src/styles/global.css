@@ -580,6 +580,31 @@ strong {
   height: 100%;
 }
 
+.clarity-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  color: var(--color-text-muted);
+}
+
+.clarity-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--color-success-bg, #e8f5e9);
+  color: var(--color-success, #4caf50);
+  font-weight: 600;
+}
+
+.clarity-text {
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
 /* Route Recommendation */
 .lane-badge {
   display: inline-flex;

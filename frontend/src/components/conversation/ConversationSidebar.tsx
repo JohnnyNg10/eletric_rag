@@ -7,6 +7,7 @@ interface ConversationSidebarProps {
   activeConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onNewConversation: () => void;
+  refreshTrigger?: number;  // 用于触发刷新的时间戳
 }
 
 export function ConversationSidebar({
@@ -14,6 +15,7 @@ export function ConversationSidebar({
   activeConversationId,
   onSelectConversation,
   onNewConversation,
+  refreshTrigger,
 }: ConversationSidebarProps) {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -23,7 +25,7 @@ export function ConversationSidebar({
 
   useEffect(() => {
     loadConversations(1);
-  }, [accessToken]);
+  }, [accessToken, refreshTrigger]);
 
   const loadConversations = async (pageNum: number) => {
     if (!accessToken) return;

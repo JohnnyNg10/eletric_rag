@@ -64,8 +64,10 @@ async def execute_query(
             filters=request.filters,
             refined_query=request.refined_query,
             selected_option_id=request.selected_option_id,
+            custom_refinement=request.custom_refinement,  # [方案C]
             clarification_context=request.clarification_context,
-            user_lane=request.user_lane  # [阶段B] 传递用户选择的车道
+            user_lane=request.user_lane,  # [阶段B] 传递用户选择的车道
+            cache_strategy=request.cache_strategy  # 传递缓存策略
         )
 
         # 需要澄清：200 + status=need_clarification

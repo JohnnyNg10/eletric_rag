@@ -414,6 +414,7 @@ class ClarificationLog(Base):
     # 用户行为
     user_choice = Column(String(100), comment="用户选择")
     user_input = Column(Text, comment="用户自定义输入")
+    custom_input = Column(Boolean, default=False, comment="是否使用自定义输入（方案C）")
     refined_query = Column(Text, comment="澄清后的查询")
 
     # 效果评估

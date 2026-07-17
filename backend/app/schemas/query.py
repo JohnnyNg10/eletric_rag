@@ -15,10 +15,14 @@ class QueryRequest(BaseModel):
     # 澄清功能字段
     refined_query: Optional[str] = Field(default=None, description="用户选择澄清选项后的精炼查询")
     selected_option_id: Optional[int] = Field(default=None, description="用户选择的澄清选项ID")
+    custom_refinement: Optional[str] = Field(default=None, max_length=200, description="用户自定义补充内容（方案C）")
     clarification_context: Optional[Dict[str, Any]] = Field(default=None, description="澄清上下文（包含原始query、vagueness_score等）")
 
     # [阶段B] 路由覆盖字段
     user_lane: Optional[str] = Field(default=None, description="用户选择的车道（覆盖系统建议）")
+
+    # 缓存策略选择
+    cache_strategy: Optional[str] = Field(default="exact", description="缓存策略：exact(精确匹配) 或 semantic(语义匹配)")
 
     @field_validator('query')
     @classmethod
@@ -35,6 +39,17 @@ class QueryRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
+        return v
+
+    @field_validator('custom_refinement')
+    @classmethod
+    def validate_custom_refinement(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 200:
+                raise ValueError("自定义补充内容不能超过200字符")
         return v
 
     @field_validator('user_lane')

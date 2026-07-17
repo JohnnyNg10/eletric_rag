@@ -62,8 +62,10 @@ class QueryService:
         filters: Optional[Dict[str, Any]] = None,
         refined_query: Optional[str] = None,
         selected_option_id: Optional[int] = None,
+        custom_refinement: Optional[str] = None,  # [方案C] 自定义补充
         clarification_context: Optional[Dict[str, Any]] = None,
-        user_lane: Optional[str] = None  # [阶段B] 用户选择的车道（覆盖系统建议）
+        user_lane: Optional[str] = None,  # [阶段B] 用户选择的车道（覆盖系统建议）
+        cache_strategy: str = "exact"  # 缓存策略：exact 或 semantic
     ) -> Dict[str, Any]:
         """
         执行完整的查询流程
@@ -77,7 +79,8 @@ class QueryService:
         4. 生成：LLM生成答案（TODO）
 
         澄清流程：
-        - 如果提供了 refined_query，说明用户选择了澄清选项
+        - 如果提供了 custom_refinement，优先使用（方案C）
+        - 否则如果提供了 refined_query，使用澄清选项
         - 跳过笼统度评估，只做术语标准化后直接进入路由层
         """
         start_time = time.time()
@@ -92,28 +95,34 @@ class QueryService:
             )
 
         resolved_query = query
-        if conversation_history and refined_query is None:
+        if conversation_history and refined_query is None and custom_refinement is None:
             resolved_query = self.coreference_resolver.resolve(query, conversation_history)
             if resolved_query != query:
                 logger.info(f"[MultiTurn] 指代消解: {query!r} → {resolved_query!r}")
 
-        # 判断是否为澄清后的查询
-        is_clarified_query = refined_query is not None
-        # 澄清查询使用 refined_query；普通查询使用指代消解后的 resolved_query
-        actual_query = refined_query if is_clarified_query else resolved_query
+        # [方案C] 优先级：custom_refinement > refined_query > resolved_query
+        final_query = custom_refinement if custom_refinement else (refined_query if refined_query else resolved_query)
+        is_clarified_query = custom_refinement is not None or refined_query is not None
+        is_custom_input = custom_refinement is not None
 
         # 步骤1: 预处理
         if is_clarified_query:
             # 澄清后的查询：仅做术语标准化，跳过笼统度评估
-            logger.info(f"[User {user_id}] Processing clarified query: {refined_query}")
+            logger.info(f"[User {user_id}] Processing clarified query: {final_query} (custom={is_custom_input})")
             preprocessing_input = PreprocessingInput(
-                query=refined_query,
+                query=final_query,
                 user_context={'user_id': user_id, 'conversation_id': conversation_id},
                 enable_optimization=False  # 跳过笼统度评估
             )
             preprocessing_output: PreprocessingOutput = await self.preprocessor.preprocess(
                 preprocessing_input
             )
+
+            # 从 clarification_context 中恢复初始预处理的 lane_suggestion
+            if clarification_context:
+                preprocessing_output.lane_suggestion = clarification_context.get('lane_suggestion', 'fast')
+                preprocessing_output.lane_confidence = clarification_context.get('lane_confidence', 0.7)
+                preprocessing_output.lane_reason = clarification_context.get('lane_reason', '')
         else:
             # 首次查询：术语标准化 + 笼统度评估
             preprocessing_input = PreprocessingInput(
@@ -142,16 +151,28 @@ class QueryService:
             route_decision = RouteDecision(
                 lane=user_lane,
                 reason=f"用户选择：{user_lane}车道",
-                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3, "enable_hyde": True} if user_lane == "fast" else {"max_steps": 3, "step_timeout": 2000, "total_timeout": 7000}
+                strategy_params={"recall_top_k": 20, "enable_retry": True, "max_expansions": 3, "enable_hyde": True} if user_lane == "fast" else {"max_steps": 3, "step_timeout": 120000, "total_timeout": 600000}
             )
             predicted_lane = preprocessing_output.lane_suggestion if hasattr(preprocessing_output, 'lane_suggestion') else "fast"
             lane_confidence = preprocessing_output.lane_confidence if hasattr(preprocessing_output, 'lane_confidence') else 0.7
         else:
-            # 使用 Router 路由（当前为关键词规则，未来可能替换为微调模型）
+            # 使用 Router 路由（关键词规则），再与预处理 LLM 建议融合
             route_decision = self.router.route(preprocessing_output.optimized_query)
-            # [阶段B] 记录预测车道（来自 LLM 建议或 Router）
             predicted_lane = preprocessing_output.lane_suggestion if hasattr(preprocessing_output, 'lane_suggestion') else route_decision.lane
             lane_confidence = preprocessing_output.lane_confidence if hasattr(preprocessing_output, 'lane_confidence') else 0.7
+
+            # LLM 建议慢车道且置信度 >= 0.7 时覆盖 Router 的快车道判断
+            # Router 关键词规则容易漏判（如专业多跳查询没有显式对比词），LLM 感知更准
+            llm_lane = getattr(preprocessing_output, 'lane_suggestion', None)
+            llm_confidence = getattr(preprocessing_output, 'lane_confidence', 0.0)
+            if llm_lane == "slow" and llm_confidence >= 0.7 and route_decision.lane == "fast":
+                from app.core.retrieval import RouteDecision
+                route_decision = RouteDecision(
+                    lane="slow",
+                    reason=f"LLM 建议慢车道（confidence={llm_confidence:.2f}），覆盖 Router 快车道判断",
+                    strategy_params={"max_steps": 3, "step_timeout": 120000, "total_timeout": 600000}
+                )
+                logger.info(f"[User {user_id}] LLM lane_suggestion overrides Router: slow (conf={llm_confidence:.2f})")
 
         logger.info(f"[User {user_id}] Route decision: {route_decision.lane} - {route_decision.reason}")
 
@@ -168,7 +189,6 @@ class QueryService:
             )
 
             lane_info = {
-                'lane': 'fast',
                 'expanded_queries': retrieval_result.expanded_queries,
                 'filters': retrieval_result.filters,
                 'metadata': retrieval_result.metadata,
@@ -187,7 +207,6 @@ class QueryService:
             )
 
             lane_info = {
-                'lane': 'slow',
                 'reasoning_steps': retrieval_result.reasoning_steps,
                 'retrieval_time': retrieval_result.retrieval_time,
                 'steps_taken': retrieval_result.steps_taken,
@@ -233,49 +252,118 @@ class QueryService:
 
             logger.info(f"[User {user_id}] Generating answer with {len(chunks_for_generation)} chunks")
 
-            # L4 生成缓存
-            chunk_contents = [c.content for c in chunks_for_generation]
-            cached_gen = cache.get_generation(preprocessing_output.optimized_query, chunk_contents, conversation_id)
+            # 语义缓存检查（仅当 cache_strategy=semantic 且启用时）
+            from app.config import settings as cfg
+            semantic_cache_hit = False
+            query_embedding = None
 
-            if cached_gen is not None:
-                logger.info(f"[User {user_id}] L4 generation cache hit")
-                answer = cached_gen["answer"]
-                citations = cached_gen["citations"]
-                generation_time = cached_gen.get("generation_time_ms", 0)
-                cache_hit = True
-            else:
-                generation_result = await self.generator.generate(
-                    query=preprocessing_output.optimized_query,
-                    chunks=chunks_for_generation,
-                    history=conversation_history if conversation_history else None
+            if cache_strategy == "semantic" and cfg.SEMANTIC_CACHE_ENABLED and not conversation_history:
+                from app.storage.semantic_cache import get_semantic_cache_manager
+                from app.core.embedding.embedder import get_embedder
+
+                embedder = get_embedder()
+                query_embedding = embedder.encode(preprocessing_output.optimized_query)
+
+                semantic_cache = get_semantic_cache_manager(cfg.SEMANTIC_CACHE_SIMILARITY_THRESHOLD)
+                cached_semantic = semantic_cache.lookup(
+                    query_embedding,
+                    filters or {},
+                    preprocessing_output.optimized_query
                 )
-                logger.info(f"[User {user_id}] Answer generated in {generation_result.generation_time}ms, tokens={generation_result.token_count}")
 
-                citations = [
-                    {
-                        'index': c.index,
-                        'chunk_id': c.chunk_id,
-                        'standard_no': c.standard_no,
-                        'clause': c.clause,
-                        'content_snippet': c.content_snippet,
-                        'document_title': c.document_title
-                    }
-                    for c in generation_result.citations
-                ]
-                answer = generation_result.answer
-                generation_time = generation_result.generation_time
-                cache_hit = False
+                if cached_semantic:
+                    logger.info(f"[User {user_id}] Semantic cache hit (similarity={cached_semantic.similarity_score:.3f})")
+                    answer = cached_semantic.answer
+                    citations = cached_semantic.citations
+                    generation_time = 0  # 缓存命中，生成时间为0
+                    cache_hit = True
+                    semantic_cache_hit = True
 
-                cache.set_generation(
-                    preprocessing_output.optimized_query,
-                    chunk_contents,
-                    {
-                        "answer": answer,
-                        "citations": citations,
-                        "generation_time_ms": generation_time,
-                    },
-                    conversation_id
-                )
+            # 传统 L4 精确匹配缓存（semantic cache 未命中时）
+            if not semantic_cache_hit:
+                chunk_contents = [c.content for c in chunks_for_generation]
+                cached_gen = cache.get_generation(preprocessing_output.optimized_query, chunk_contents, conversation_id)
+
+                if cached_gen is not None:
+                    logger.info(f"[User {user_id}] L4 generation cache hit")
+                    answer = cached_gen["answer"]
+                    citations = cached_gen["citations"]
+                    generation_time = cached_gen.get("generation_time_ms", 0)
+                    cache_hit = True
+                else:
+                    generation_result = await self.generator.generate(
+                        query=preprocessing_output.optimized_query,
+                        chunks=chunks_for_generation,
+                        history=conversation_history if conversation_history else None
+                    )
+                    logger.info(f"[User {user_id}] Answer generated in {generation_result.generation_time}ms, tokens={generation_result.token_count}")
+
+                    citations = [
+                        {
+                            'index': c.index,
+                            'chunk_id': c.chunk_id,
+                            'standard_no': c.standard_no,
+                            'clause': c.clause,
+                            'content_snippet': c.content_snippet,
+                            'document_title': c.document_title
+                        }
+                        for c in generation_result.citations
+                    ]
+                    answer = generation_result.answer
+                    generation_time = generation_result.generation_time
+                    cache_hit = False
+
+                    # 存储到传统 L4 缓存
+                    cache.set_generation(
+                        preprocessing_output.optimized_query,
+                        chunk_contents,
+                        {
+                            "answer": answer,
+                            "citations": citations,
+                            "generation_time_ms": generation_time,
+                        },
+                        conversation_id
+                    )
+
+                    # 存储到语义缓存（仅当 semantic 策略且未命中时）
+                    if cache_strategy == "semantic" and cfg.SEMANTIC_CACHE_ENABLED and not conversation_history:
+                        from app.storage.semantic_cache import get_semantic_cache_manager
+                        from app.core.embedding.embedder import get_embedder
+
+                        if query_embedding is None:
+                            embedder = get_embedder()
+                            query_embedding = embedder.encode(preprocessing_output.optimized_query)
+
+                        semantic_cache = get_semantic_cache_manager(cfg.SEMANTIC_CACHE_SIMILARITY_THRESHOLD)
+
+                        # 准备召回结果（从 retrieval_result 提取）
+                        recall_results = []
+                        if hasattr(retrieval_result, 'recalled_chunks'):
+                            recall_results = [c.model_dump() if hasattr(c, 'model_dump') else c for c in retrieval_result.recalled_chunks]
+
+                        # 准备重排结果
+                        rerank_results = [
+                            {
+                                'chunk_id': r.chunk_id,
+                                'content': r.content,
+                                'score': r.score,
+                                'document_id': r.document_id,
+                                'standard_no': r.standard_no,
+                                'clause': r.clause,
+                                'document_title': r.document_title
+                            }
+                            for r in chunks_for_generation
+                        ]
+
+                        semantic_cache.store(
+                            query_text=preprocessing_output.optimized_query,
+                            query_embedding=query_embedding,
+                            filters=filters or {},
+                            recall_results=recall_results,
+                            rerank_results=rerank_results,
+                            answer=answer,
+                            citations=citations
+                        )
 
         except Exception as e:
             logger.error(f"[User {user_id}] Generation error: {e}", exc_info=True)
@@ -316,8 +404,9 @@ class QueryService:
                     self._record_clarification_log(
                         query_log_id=query_log_id,
                         original_query=query,
-                        refined_query=refined_query,
+                        refined_query=final_query,
                         selected_option_id=selected_option_id,
+                        custom_input=is_custom_input,  # [方案C]
                         clarification_context=clarification_context
                     )
             except Exception as e:
@@ -463,6 +552,7 @@ class QueryService:
         original_query: str,
         refined_query: str,
         selected_option_id: Optional[int],
+        custom_input: bool,  # [方案C]
         clarification_context: Dict[str, Any]
     ) -> int:
         """
@@ -478,10 +568,15 @@ class QueryService:
         missing_dimensions = clarification_context.get('missing_dimensions')
 
         # 确定用户选择类型
-        if selected_option_id:
+        if custom_input:
+            user_choice = "custom"
+            user_input = refined_query
+        elif selected_option_id:
             user_choice = f"option_{selected_option_id}"
+            user_input = None
         else:
             user_choice = "skip"
+            user_input = None
 
         clarification_log = ClarificationLog(
             query_log_id=query_log_id,
@@ -490,6 +585,8 @@ class QueryService:
             vagueness_score=vagueness_score,
             options_generated=options_generated,
             user_choice=user_choice,
+            user_input=user_input,
+            custom_input=custom_input,  # [方案C]
             refined_query=refined_query,
             missing_dimensions=missing_dimensions
         )
@@ -498,7 +595,7 @@ class QueryService:
         self.db.commit()
         self.db.refresh(clarification_log)
 
-        logger.info(f"[ClarificationLog] Recorded clarification_log_id={clarification_log.id} for query_log_id={query_log_id}")
+        logger.info(f"[ClarificationLog] Recorded clarification_log_id={clarification_log.id} for query_log_id={query_log_id} (custom={custom_input})")
         return clarification_log.id
 
     def _record_badcase_if_needed(
