@@ -113,6 +113,10 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+    LOG_FILE_ENABLED: bool = True
+    LOG_FILE_PATH: str = "logs/backend.log"
+    LOG_FILE_MAX_BYTES: int = 10 * 1024 * 1024
+    LOG_FILE_BACKUP_COUNT: int = 10
 
     # Model Configuration
     MODELS_DIR: str = "models"  # 模型存储目录
@@ -138,6 +142,14 @@ class Settings(BaseSettings):
     # OCR Configuration
     OCR_USE_GPU: bool = True
     OCR_CONFIDENCE_THRESHOLD: float = 0.85  # OCR置信度阈值
+
+    # MinerU API Configuration
+    MINERU_API_URL: str = "http://127.0.0.1:8001"  # MinerU API 地址
+    MINERU_BACKEND: str = "pipeline"  # pipeline (纯CPU) / hybrid-engine (需GPU)
+    MINERU_SYNC_TIMEOUT: int = 120  # 同步模式超时（秒）
+    MINERU_ASYNC_POLL_INTERVAL: int = 3  # 异步轮询间隔（秒）
+    MINERU_ASYNC_MAX_POLL_TIME: int = 600  # 异步最大轮询时间（秒）
+    MINERU_ENABLED: bool = True  # 是否启用 MinerU（关闭则回退到 PyMuPDF）
 
     class Config:
         env_file = ".env"

@@ -60,6 +60,16 @@ class QueryRequest(BaseModel):
         return v
 
 
+class ImageInfo(BaseModel):
+    """图片信息"""
+    image_id: int = Field(..., description="图片ID")
+    url: str = Field(..., description="图片访问URL（预签名）")
+    caption: Optional[str] = Field(default=None, description="图注")
+    figure_number: Optional[str] = Field(default=None, description="图号")
+    vlm_description: Optional[str] = Field(default=None, description="VLM生成的描述")
+    page_number: int = Field(..., description="所在页码")
+
+
 class Citation(BaseModel):
     """引用来源"""
     index: int = Field(..., description="引用编号")
@@ -68,6 +78,7 @@ class Citation(BaseModel):
     clause: Optional[str] = Field(default=None, description="条款号")
     content_snippet: str = Field(default="", description="引用内容片段")
     document_title: Optional[str] = Field(default=None, description="文档标题")
+    images: List[ImageInfo] = Field(default_factory=list, description="关联的图片列表")
 
 
 class OptimizationOption(BaseModel):

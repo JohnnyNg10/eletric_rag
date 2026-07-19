@@ -355,9 +355,10 @@ class DocumentChunker:
     def _is_clause(self, line: str) -> bool:
         """判断是否为条款"""
         patterns = [
-            r"^#{2,4}\s+\d+\.\d+",      # ## 5.2.1
-            r"^\d+\.\d+\.\d+\s",         # 5.2.1 (三级)
-            r"^\d+\.\d+\s+[^\d]",        # 5.2 技术要求（二级，后面不是数字）
+            r"^#{2,4}\s+\d+\.\d+",           # ## 5.2.1 (标准格式)
+            r"^#{2,4}\s*\d{3,5}(?:\.\d+)?",  # ## 7314 或 ## 73141 (MinerU格式，3-5位数字)
+            r"^\d+\.\d+\.\d+\s",              # 5.2.1 (三级)
+            r"^\d+\.\d+\s+[^\d]",             # 5.2 技术要求（二级，后面不是数字）
         ]
         for pattern in patterns:
             if re.match(pattern, line):

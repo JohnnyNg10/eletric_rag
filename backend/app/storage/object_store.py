@@ -217,6 +217,35 @@ class ObjectStore:
             logger.error(f"Failed to get PDF URL: {e}")
             return None
 
+    def get_image_url(
+        self,
+        object_name: str,
+        expires_seconds: int = 3600
+    ) -> Optional[str]:
+        """
+        获取图片预签名 URL（用于临时访问）
+
+        Args:
+            object_name: 对象名称
+            expires_seconds: 过期时间（秒）
+
+        Returns:
+            str: 预签名 URL
+        """
+        try:
+            from datetime import timedelta
+
+            url = self.client.presigned_get_object(
+                bucket_name=self.image_bucket,
+                object_name=object_name,
+                expires=timedelta(seconds=expires_seconds)
+            )
+            return url
+
+        except S3Error as e:
+            logger.error(f"Failed to get image URL: {e}")
+            return None
+
     def delete_object(
         self,
         bucket_name: str,

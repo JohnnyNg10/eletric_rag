@@ -23,7 +23,7 @@ from app.storage.vector_store import vector_store
 from app.storage.search_engine import search_engine
 from app.storage.object_store import object_store
 from app.db.session import get_db
-from app.db.models import Document, Chunk as DBChunk
+from app.db.models import Document, Chunk as DBChunk, Image as DBImage
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,14 @@ class DocumentIngestionPipeline:
                 db.rollback()
                 raise e
 
+            # Step 6.5: 处理图片（VLM 模式）
+            images_count = 0
+            if parsed.get('images'):
+                logger.info(f"Step 6.5: Processing {len(parsed['images'])} images...")
+                images_count = self._process_images(parsed['images'], document_id, metadata, db)
+                document.image_count = images_count
+                db.commit()
+
             # Step 7: 文档分块
             logger.info("Step 7: Chunking document...")
             chunks = document_chunker.chunk_document(
@@ -165,14 +173,16 @@ class DocumentIngestionPipeline:
 
             # Step 9: 更新文档处理状态
             document.process_status = 'completed'
+            document.chunk_count = indexed_count
             db.commit()
 
-            logger.info(f"Document ingestion completed: {indexed_count} chunks indexed")
+            logger.info(f"Document ingestion completed: {indexed_count} chunks, {images_count} images indexed")
 
             return {
                 "success": True,
                 "document_id": document_id,
                 "chunks_count": indexed_count,
+                "images_count": images_count,
                 "message": "Document ingested successfully"
             }
 
@@ -235,6 +245,119 @@ class DocumentIngestionPipeline:
             page_count=pages,
             process_status='processing'
         )
+
+    def _process_images(
+        self,
+        images: List[Dict],
+        document_id: int,
+        metadata: Dict,
+        db
+    ) -> int:
+        """处理 VLM 解析出的图片：MinIO 上传 + DB 记录 + 向量索引"""
+        import tempfile
+        import os
+        import hashlib
+
+        count = 0
+        for img_info in images:
+            try:
+                ext = img_info.get('ext', 'png')
+                description = img_info.get('description', '')
+
+                # 1. 写临时文件，上传到 MinIO
+                object_name = (
+                    f"images/{metadata.get('standard_no', 'unknown')}"
+                    f"/p{img_info['page']}_{img_info['index']}.{ext}"
+                )
+                with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
+                    tmp.write(img_info['bytes'])
+                    tmp_path = tmp.name
+                try:
+                    self.object_store.upload_image(tmp_path, object_name)
+                finally:
+                    os.unlink(tmp_path)
+
+                # 2. 创建 Image DB 记录
+                db_image = DBImage(
+                    document_id=document_id,
+                    image_type='figure',
+                    minio_path=object_name,
+                    page_number=img_info.get('page'),
+                    image_index=img_info.get('index'),
+                    file_size=len(img_info['bytes']),
+                    vlm_description=description,
+                    vlm_model=img_info.get('vlm_model', ''),
+                    vlm_confidence=img_info.get('vlm_confidence', 0.0)
+                )
+                db.add(db_image)
+                db.flush()
+
+                # 3. 为图片创建可检索的 image_description Chunk
+                if description:
+                    content = f"[图片描述] 第{img_info['page']}页 图{img_info['index'] + 1}：{description}"
+                    content_hash = hashlib.sha256(content.encode()).hexdigest()
+                    dense_vector = self.embedder.encode(content).tolist()
+                    sparse_vector = self.embedder.encode_sparse(content)
+
+                    db_chunk = DBChunk(
+                        document_id=document_id,
+                        content=content,
+                        content_hash=content_hash,
+                        chunk_type='child',
+                        content_type='image_description',
+                        page_start=img_info.get('page'),
+                        page_end=img_info.get('page'),
+                        char_count=len(content),
+                        token_count=len(content) // 2,
+                        related_resource_id=db_image.id,
+                        related_resource_type='image',
+                        has_dense_vector=True,
+                        has_sparse_vector=True,
+                        meta_data={
+                            'standard_no': metadata.get('standard_no'),
+                            'category': metadata.get('category'),
+                            'voltage_level': metadata.get('voltage_level'),
+                        }
+                    )
+                    db.add(db_chunk)
+                    db.flush()
+                    vector_id = str(db_chunk.id)
+                    db_chunk.vector_id = vector_id
+
+                    self.vector_store.upsert_points([{
+                        "id": vector_id,
+                        "dense_vector": dense_vector,
+                        "sparse_vector": sparse_vector,
+                        "payload": {
+                            "doc_id": document_id,
+                            "chunk_id": db_chunk.id,
+                            "chunk_type": "child",
+                            "content_type": "image_description",
+                            "text": content,
+                            **{k: v for k, v in (metadata or {}).items() if v is not None}
+                        }
+                    }])
+
+                    self.search_engine.bulk_index([{
+                        "chunk_id": vector_id,
+                        "doc_id": document_id,
+                        "text": content,
+                        "standard_no": metadata.get('standard_no'),
+                        "category": metadata.get('category'),
+                        "voltage_level": metadata.get('voltage_level')
+                    }])
+
+                    db_image.chunk_id = db_chunk.id
+                    db.flush()
+
+                count += 1
+            except Exception as e:
+                logger.error(
+                    f"图片处理失败 (页{img_info.get('page')}, 图{img_info.get('index')}): {e}"
+                )
+
+        db.commit()
+        return count
 
     def _process_chunks(
         self,

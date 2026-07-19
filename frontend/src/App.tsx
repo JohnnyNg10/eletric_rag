@@ -2,7 +2,9 @@ import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react
 import AppHeader from './components/layout/AppHeader';
 import { useAuthContext } from './context/AuthContext';
 import { HistoryPage } from './pages/HistoryPage';
+import { ImportDocumentPage } from './pages/ImportDocumentPage';
 import { LoginPage } from './pages/LoginPage';
+import { ManageDocumentsPage } from './pages/ManageDocumentsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { SearchPage } from './pages/SearchPage';
 
@@ -65,6 +67,8 @@ export default function App() {
         <Route element={<RequireAuth />}>
           <Route path="/search" element={<SearchPage />} />
           <Route path="/history" element={<HistoryPage />} />
+          <Route path="/documents/import" element={<ImportDocumentPage />} />
+          <Route path="/documents/manage" element={<ManageDocumentsPage />} />
         </Route>
 
         <Route path="*" element={<NotFoundPage />} />

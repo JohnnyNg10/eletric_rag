@@ -203,16 +203,8 @@ class ScannedPDFProcessor:
     async def _save_markdown(self, markdown: str, doc_id: int):
         """保存Markdown到MinIO"""
         try:
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
-                f.write(markdown)
-                temp_path = f.name
-
             object_name = f"scanned_markdown/doc_{doc_id}/full.md"
-            object_store.upload_markdown(temp_path, object_name)
-
-            # 删除临时文件
-            os.unlink(temp_path)
+            object_store.upload_markdown(markdown, object_name)
 
             logger.info(f"Markdown已保存: {object_name}")
 

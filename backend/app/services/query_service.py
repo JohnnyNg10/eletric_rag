@@ -31,8 +31,9 @@ from app.core.generation import (
     AnswerGenerator,
     get_generator
 )
-from app.db.models import QueryLog, ClarificationLog
+from app.db.models import QueryLog, ClarificationLog, Image
 from app.db.repositories.query_repo import QueryLogRepository
+from app.storage.object_store import object_store
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,60 @@ class QueryService:
         self.db = db  # 数据库会话，用于日志记录
         self.query_log_repo = QueryLogRepository(db) if db else None
         self.coreference_resolver = CoreferenceResolver()
+
+    def _get_chunk_images(self, chunk_id: int, document_id: int) -> List[Dict[str, Any]]:
+        """
+        获取 chunk 关联的图片信息
+
+        Args:
+            chunk_id: chunk ID
+            document_id: 文档 ID
+
+        Returns:
+            图片信息列表
+        """
+        if not self.db:
+            return []
+
+        try:
+            # 查询该 chunk 关联的图片（通过 chunk_id）
+            images = self.db.query(Image).filter(
+                Image.chunk_id == chunk_id
+            ).all()
+
+            # 如果 chunk 没有直接关联的图片，查询同文档同页的图片
+            if not images:
+                # 先获取 chunk 的页码信息
+                from app.db.models import Chunk
+                chunk = self.db.query(Chunk).filter(Chunk.id == chunk_id).first()
+                if chunk and chunk.page_start:
+                    images = self.db.query(Image).filter(
+                        Image.document_id == document_id,
+                        Image.page_number >= chunk.page_start,
+                        Image.page_number <= (chunk.page_end or chunk.page_start)
+                    ).limit(3).all()  # 限制最多3张
+
+            # 生成图片信息
+            image_infos = []
+            for img in images:
+                if img.minio_path:
+                    # 生成预签名URL
+                    url = object_store.get_image_url(img.minio_path, expires_seconds=3600)
+                    if url:
+                        image_infos.append({
+                            'image_id': img.id,
+                            'url': url,
+                            'caption': img.caption,
+                            'figure_number': img.figure_number,
+                            'vlm_description': img.vlm_description,
+                            'page_number': img.page_number
+                        })
+
+            return image_infos
+
+        except Exception as e:
+            logger.error(f"Failed to get images for chunk {chunk_id}: {e}")
+            return []
 
     async def execute_query(
         self,
@@ -275,6 +330,16 @@ class QueryService:
                     logger.info(f"[User {user_id}] Semantic cache hit (similarity={cached_semantic.similarity_score:.3f})")
                     answer = cached_semantic.answer
                     citations = cached_semantic.citations
+                    # 为缓存的 citations 补充图片信息
+                    for citation in citations:
+                        if isinstance(citation, dict) and 'chunk_id' in citation:
+                            # 找到对应的 chunk 获取 document_id
+                            doc_id = 0
+                            for chunk in chunks_for_generation:
+                                if chunk.chunk_id == citation['chunk_id']:
+                                    doc_id = chunk.document_id
+                                    break
+                            citation['images'] = self._get_chunk_images(citation['chunk_id'], doc_id)
                     generation_time = 0  # 缓存命中，生成时间为0
                     cache_hit = True
                     semantic_cache_hit = True
@@ -288,6 +353,16 @@ class QueryService:
                     logger.info(f"[User {user_id}] L4 generation cache hit")
                     answer = cached_gen["answer"]
                     citations = cached_gen["citations"]
+                    # 为缓存的 citations 补充图片信息
+                    for citation in citations:
+                        if isinstance(citation, dict) and 'chunk_id' in citation:
+                            # 找到对应的 chunk 获取 document_id
+                            doc_id = 0
+                            for chunk in chunks_for_generation:
+                                if chunk.chunk_id == citation['chunk_id']:
+                                    doc_id = chunk.document_id
+                                    break
+                            citation['images'] = self._get_chunk_images(citation['chunk_id'], doc_id)
                     generation_time = cached_gen.get("generation_time_ms", 0)
                     cache_hit = True
                 else:
@@ -305,7 +380,11 @@ class QueryService:
                             'standard_no': c.standard_no,
                             'clause': c.clause,
                             'content_snippet': c.content_snippet,
-                            'document_title': c.document_title
+                            'document_title': c.document_title,
+                            'images': self._get_chunk_images(
+                                c.chunk_id,
+                                chunks_for_generation[c.index - 1].document_id if c.index <= len(chunks_for_generation) else 0
+                            )
                         }
                         for c in generation_result.citations
                     ]

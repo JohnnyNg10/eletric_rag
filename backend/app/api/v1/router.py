@@ -3,7 +3,7 @@ API v1 router - 聚合所有 endpoints
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, query, metrics
+from app.api.v1.endpoints import auth, query, metrics, document
 
 api_router = APIRouter()
 
@@ -16,5 +16,5 @@ api_router.include_router(query.router, prefix="/query", tags=["查询"])
 # 监控路由
 api_router.include_router(metrics.router, prefix="/metrics", tags=["监控"])
 
-# 其他路由稍后添加
-# api_router.include_router(documents.router, prefix="/documents", tags=["文档管理"])
+# 文档管理路由
+api_router.include_router(document.router, prefix="/documents", tags=["文档管理"])

@@ -53,6 +53,18 @@ export default function AppHeader({ accessToken, user, onLogout }: AppHeaderProp
             >
               历史
             </NavLink>
+            <NavLink
+              to={accessToken ? '/documents/import' : `/login?redirect=${encodeURIComponent('/documents/import')}`}
+              className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+            >
+              导入
+            </NavLink>
+            <NavLink
+              to={accessToken ? '/documents/manage' : `/login?redirect=${encodeURIComponent('/documents/manage')}`}
+              className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+            >
+              管理
+            </NavLink>
           </nav>
 
           <div className="header-actions">

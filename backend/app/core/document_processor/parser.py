@@ -2,17 +2,20 @@
 PDF 解析器
 
 支持：
-- 文字版 PDF：PyMuPDF 提取原生文本
+- 文字版 PDF：MinerU API 解析（优先）/ VLM 精确识别（保留布局+表格）+ 图片提取单独处理
 - 扫描版 PDF：PaddleOCR 识别
-- 表格提取：pdfplumber
-- 公式识别：LaTeX 格式
+- 表格提取：VLM Markdown 输出
+- 图片提取：PyMuPDF 嵌入图片 → VLM 描述 → MinIO 存储
 """
 import fitz  # PyMuPDF
 import pdfplumber
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import logging
 import re
+import asyncio
+import tempfile
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +25,18 @@ class PDFParser:
 
     def __init__(self):
         self.ocr_engine = None  # 延迟加载 PaddleOCR
+        self.vlm_client = None  # 延迟加载 VLM client
+        self.mineru_client = None  # 延迟加载 MinerU client
+        self._mineru_available = None  # MinerU 服务可用性缓存
 
-    def parse_pdf(self, pdf_path: str) -> Dict:
+    def parse_pdf(self, pdf_path: str, use_vlm: bool = False, use_mineru: bool = True) -> Dict:
         """
         解析 PDF 文档
 
         Args:
             pdf_path: PDF 文件路径
+            use_mineru: 使用 MinerU 解析文字版 PDF（默认 True，优先级高于 use_vlm）
+            use_vlm: 使用 VLM 解析文字版 PDF（use_mineru=False 时生效）
 
         Returns:
             解析结果字典:
@@ -36,6 +44,7 @@ class PDFParser:
                 "title": "文档标题",
                 "content": "Markdown 格式内容",
                 "pages": 总页数,
+                "images": [{"page": 1, "index": 0, "bytes": b"...", "ext": "png", "description": "..."}],
                 "metadata": {
                     "standard_no": "GB 1002-2024",
                     "version": "2024版",
@@ -55,8 +64,17 @@ class PDFParser:
             is_text_pdf = self._is_text_pdf(doc)
 
             if is_text_pdf:
-                logger.info("Detected text-based PDF, using PyMuPDF")
-                result = self._parse_text_pdf(doc, pdf_path)
+                if use_mineru:
+                    logger.info("Detected text-based PDF, using MinerU for extraction")
+                    page_count = len(doc)
+                    doc.close()
+                    return self._parse_text_pdf_with_mineru(pdf_path, page_count)
+                elif use_vlm:
+                    logger.info("Detected text-based PDF, using VLM for precise extraction")
+                    result = asyncio.run(self._parse_text_pdf_with_vlm(doc, pdf_path))
+                else:
+                    logger.info("Detected text-based PDF, using PyMuPDF")
+                    result = self._parse_text_pdf(doc, pdf_path)
             else:
                 logger.info("Detected scanned PDF, using OCR")
                 result = self._parse_scanned_pdf(doc, pdf_path)
@@ -78,6 +96,318 @@ class PDFParser:
             if len(text) > 100:  # 至少100字符
                 return True
         return False
+
+    async def _parse_text_pdf_with_vlm(self, doc: fitz.Document, pdf_path: Path) -> Dict:
+        """
+        使用 VLM 精确解析文字版 PDF
+
+        流程：
+        1. 逐页转图送 VLM 识别（获取完整 Markdown 内容，包含表格）
+        2. 单独提取页面嵌入图片 → VLM 描述 → 保存图片字节
+        3. 返回 Markdown 内容 + 图片列表（供后续 ingestion_pipeline 处理）
+        """
+        # 延迟加载 VLM client
+        if self.vlm_client is None:
+            from app.core.vlm.vlm_client import vlm_client
+            from app.config import settings
+            if not settings.ENABLE_VLM_DESCRIPTION:
+                logger.warning("VLM 未启用，回退到 PyMuPDF 解析")
+                return self._parse_text_pdf(doc, pdf_path)
+            self.vlm_client = vlm_client
+
+        metadata = self._extract_metadata_from_filename(pdf_path.name)
+        title = doc.metadata.get("title", pdf_path.stem)
+
+        logger.info(f"VLM 解析开始: {len(doc)} 页")
+
+        # 并行处理所有页面
+        tasks = []
+        for page_num in range(len(doc)):
+            tasks.append(self._process_page_with_vlm(doc, page_num))
+
+        page_results = await asyncio.gather(*tasks)
+
+        # 合并 Markdown 内容
+        markdown_parts = []
+        all_images = []
+
+        for page_result in page_results:
+            page_num = page_result['page_num']
+            markdown_parts.append(f"\n\n---\n## 第 {page_num + 1} 页\n\n")
+            markdown_parts.append(page_result['content'])
+            all_images.extend(page_result['images'])
+
+        full_content = ''.join(markdown_parts)
+
+        logger.info(f"VLM 解析完成: {len(doc)} 页, {len(all_images)} 图片")
+
+        return {
+            "title": title,
+            "content": full_content,
+            "pages": len(doc),
+            "images": all_images,
+            "metadata": metadata,
+            "is_ocr": False,
+            "parsed_by": "vlm"
+        }
+
+    async def _process_page_with_vlm(self, doc: fitz.Document, page_num: int) -> Dict:
+        """
+        VLM 处理单页
+
+        Returns:
+            {
+                'page_num': 1,
+                'content': 'VLM 识别的 Markdown 内容',
+                'images': [{'page': 1, 'index': 0, 'bytes': b'...', 'ext': 'png', 'description': '...'}]
+            }
+        """
+        page = doc[page_num]
+
+        # 1. 提取页面嵌入的图片
+        page_images = []
+        image_list = page.get_images(full=True)
+
+        for img_index, img_info in enumerate(image_list):
+            xref = img_info[0]
+            try:
+                base_image = doc.extract_image(xref)
+                img_bytes = base_image["image"]
+                img_ext = base_image["ext"]
+
+                # 保存临时文件用于 VLM 识别
+                with tempfile.NamedTemporaryFile(suffix=f".{img_ext}", delete=False) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+
+                # VLM 生成图片描述
+                img_prompt = """请描述这张图片的技术内容。
+
+要求：
+1. 如果是工程图、示意图、流程图，描述其结构和关键元素
+2. 如果是照片，描述场景和重点对象
+3. 保持简洁专业，100字以内
+
+直接输出描述，无需前缀。"""
+
+                vlm_result = await self.vlm_client.generate_description(tmp_path, img_prompt)
+                description = (vlm_result.get('description') or '') if vlm_result else ''
+
+                # 清理临时文件
+                os.unlink(tmp_path)
+
+                page_images.append({
+                    'page': page_num + 1,
+                    'index': img_index,
+                    'bytes': img_bytes,
+                    'ext': img_ext,
+                    'description': description,
+                    'vlm_model': vlm_result.get('model', '') if vlm_result else '',
+                    'vlm_confidence': vlm_result.get('confidence', 0.0) if vlm_result else 0.0
+                })
+
+                logger.info(f"页 {page_num + 1} 图片 {img_index} 提取完成")
+
+            except Exception as e:
+                logger.warning(f"页 {page_num + 1} 图片 {img_index} 提取失败: {e}")
+
+        # 2. 整页转图送 VLM 识别获取 Markdown 内容
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 300 DPI
+        page_img_bytes = pix.tobytes("png")
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp.write(page_img_bytes)
+            tmp_path = tmp.name
+
+        page_prompt = f"""识别这一页的全部内容，输出为 Markdown 格式。
+
+要求：
+1. 保留章节标题、条款编号（如 3.2.1）
+2. 表格转为 Markdown 表格格式
+3. 图片位置标记为 [图片占位符]，不要尝试描述图片内容
+4. 保持原文排版顺序（双栏从左到右）
+5. 公式尽量还原为文本或 LaTeX
+
+直接输出 Markdown，无需额外说明。这是第 {page_num + 1} 页。"""
+
+        vlm_result = await self.vlm_client.generate_description(tmp_path, page_prompt)
+        page_content = (vlm_result.get('description') or '') if vlm_result else ''
+
+        os.unlink(tmp_path)
+
+        logger.info(f"页 {page_num + 1} 内容识别完成，长度 {len(page_content)} 字符")
+
+        return {
+            'page_num': page_num,
+            'content': page_content,
+            'images': page_images
+        }
+
+    def _check_mineru_availability(self) -> bool:
+        """检查 MinerU 服务可用性（带缓存）"""
+        from app.config import settings
+
+        if not settings.MINERU_ENABLED:
+            logger.info("MinerU 已在配置中禁用")
+            return False
+
+        # 使用缓存结果（避免每次调用都健康检查）
+        if self._mineru_available is not None:
+            return self._mineru_available
+
+        # 延迟加载 MinerU 客户端
+        if self.mineru_client is None:
+            from app.core.document_processor.mineru_client import mineru_client
+            self.mineru_client = mineru_client
+
+        # 健康检查
+        self._mineru_available = self.mineru_client.health_check()
+        return self._mineru_available
+
+    def _parse_text_pdf_with_mineru(self, pdf_path: Path, page_count: int) -> Dict:
+        """使用 MinerU API 解析文字版 PDF（HTTP 调用同机部署的服务）"""
+        from app.config import settings
+
+        # 检查服务可用性
+        if not self._check_mineru_availability():
+            logger.warning("MinerU 服务不可用，回退到 PyMuPDF 解析")
+            import fitz as _fitz
+            _doc = _fitz.open(str(pdf_path))
+            result = self._parse_text_pdf(_doc, pdf_path)
+            _doc.close()
+            return result
+
+        logger.info(f"MinerU API 解析开始: {pdf_path.name} (backend={settings.MINERU_BACKEND})")
+
+        try:
+            # 始终使用异步模式，避免同步超时导致回退到 PyMuPDF 产生乱码
+            # 异步模式无客户端超时限制，只需等待 MinerU 处理完成
+            result = self.mineru_client.parse_with_retry(
+                str(pdf_path),
+                mode="async",
+                backend=settings.MINERU_BACKEND,
+                poll_interval=settings.MINERU_ASYNC_POLL_INTERVAL,
+                max_poll_time=settings.MINERU_ASYNC_MAX_POLL_TIME,
+                max_retries=2,
+                return_content_list=True,
+            )
+
+            md_content = result["md_content"]
+            content_list = result.get("content_list", [])
+
+            logger.info(f"MinerU 返回类型检查: md_content类型={type(md_content).__name__}, content_list类型={type(content_list).__name__}, content_list长度={len(content_list) if isinstance(content_list, (list, str)) else 'N/A'}")
+
+            # 提取图片信息（MinerU 返回的是图片路径，需要读取实际文件）
+            images = self._extract_images_from_content_list(content_list, pdf_path)
+
+            logger.info(
+                f"MinerU API 解析完成: {pdf_path.name}, "
+                f"内容长度={len(md_content)} 字符, "
+                f"提取图片={len(images)} 张"
+            )
+
+            return {
+                "title": pdf_path.stem,
+                "content": md_content,
+                "pages": page_count,
+                "images": images,
+                "metadata": self._extract_metadata_from_filename(pdf_path.name),
+                "is_ocr": False,
+                "parsed_by": "mineru_api",
+            }
+
+        except Exception as e:
+            logger.error(f"MinerU API 解析失败: {e}，回退到 PyMuPDF")
+            # 回退到 PyMuPDF
+            import fitz as _fitz
+            _doc = _fitz.open(str(pdf_path))
+            result = self._parse_text_pdf(_doc, pdf_path)
+            _doc.close()
+            return result
+
+    def _extract_images_from_content_list(self, content_list: list, pdf_path: Path) -> list:
+        """
+        从 MinerU 的 content_list 中提取图片信息
+
+        Args:
+            content_list: MinerU 返回的结构化内容列表
+            pdf_path: PDF 文件路径
+
+        Returns:
+            图片列表 [{"page": 1, "index": 0, "bytes": b"...", "ext": "png", "description": "..."}]
+        """
+        images = []
+
+        if not content_list:
+            return images
+
+        # 如果 content_list 是 JSON 字符串，先解析
+        if isinstance(content_list, str):
+            try:
+                import json
+                content_list = json.loads(content_list)
+            except Exception as e:
+                logger.warning(f"content_list JSON 解析失败: {e}")
+                return images
+
+        # MinerU 的 content_list 结构：
+        # [{"type": "image", "img_path": "images/xxx.jpg", "content": "AI描述", ...}, ...]
+        for idx, item in enumerate(content_list):
+            # 跳过非字典类型的元素
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "image":
+                continue
+
+            try:
+                img_path_str = item.get("img_path", "")
+                if not img_path_str:
+                    continue
+
+                # MinerU 生成的图片通常在 PDF 所在目录的输出子目录中
+                # 实际路径需要根据 MinerU 的输出配置确定
+                # 这里简化处理：如果是相对路径，从 PDF 目录查找
+                img_path = Path(img_path_str)
+                if not img_path.is_absolute():
+                    # 尝试从 PDF 同目录下的可能输出目录查找
+                    possible_dirs = [
+                        pdf_path.parent / "output" / "images",
+                        pdf_path.parent / "images",
+                        pdf_path.parent,
+                    ]
+                    for base_dir in possible_dirs:
+                        full_path = base_dir / img_path.name
+                        if full_path.exists():
+                            img_path = full_path
+                            break
+
+                if not img_path.exists():
+                    logger.warning(f"图片文件不存在: {img_path}")
+                    continue
+
+                # 读取图片字节
+                with open(img_path, "rb") as f:
+                    img_bytes = f.read()
+
+                ext = img_path.suffix.lstrip(".")
+                description = item.get("content", "")  # MinerU VLM 生成的描述
+
+                images.append({
+                    "page": item.get("page_number", 0),  # MinerU 可能提供页码
+                    "index": idx,
+                    "bytes": img_bytes,
+                    "ext": ext or "png",
+                    "description": description,
+                    "vlm_model": "mineru",
+                    "vlm_confidence": 1.0 if description else 0.0,
+                })
+
+                logger.debug(f"提取图片: {img_path.name}, 描述长度={len(description)}")
+
+            except Exception as e:
+                logger.warning(f"提取图片失败 (index={idx}): {e}")
+
+        return images
 
     def _parse_text_pdf(self, doc: fitz.Document, pdf_path: Path) -> Dict:
         """解析文字版 PDF"""

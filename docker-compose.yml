@@ -1,0 +1,317 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: electric-rag-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-electric_rag_2024}
+      MYSQL_DATABASE: ${MYSQL_DB:-electric_rag}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_PASSWORD:-electric_rag_2024}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - electric-rag-net
+
+  # Redis 缓存 + Celery Broker
+  redis:
+    image: redis:7-alpine
+    container_name: electric-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - electric-rag-net
+
+  # Qdrant 向量数据库
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: electric-rag-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - electric-rag-net
+
+  # Elasticsearch 全文检索
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: electric-rag-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - TZ=Asia/Shanghai
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - electric-rag-net
+
+  # MinIO 对象存储
+  minio:
+    image: minio/minio:latest
+    container_name: electric-rag-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      TZ: Asia/Shanghai
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - electric-rag-net
+
+  # MinerU API 服务 (GPU 加速)
+  mineru:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mineru
+    container_name: electric-rag-mineru
+    ports:
+      - "8001:8001"
+    volumes:
+      - mineru_cache:/root/.cache
+    environment:
+      TZ: Asia/Shanghai
+      CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - electric-rag-net
+
+  # Backend API (GPU 加速 reranker)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: electric-rag-backend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      mineru:
+        condition: service_healthy
+    environment:
+      # Database
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-electric_rag_2024}
+      MYSQL_DB: ${MYSQL_DB:-electric_rag}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      # Qdrant
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+
+      # Elasticsearch
+      ES_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: 9200
+
+      # MinIO
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+
+      # MinerU
+      MINERU_API_URL: http://mineru:8001
+      MINERU_ENABLED: "true"
+      MINERU_BACKEND: pipeline
+
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+      # LLM API（需要填写真实 API Key）
+      ARK_API_KEY: ${ARK_API_KEY:-your_api_key}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      LLM_MODEL: ${LLM_MODEL:-doubao-pro-32k}
+
+      # VLM
+      DOUBAO_API_KEY: ${DOUBAO_API_KEY:-}
+
+      # GPU 配置
+      CUDA_VISIBLE_DEVICES: "0"
+      RERANKER_USE_GPU: "true"
+      RERANKER_BATCH_SIZE: "32"
+
+      # 其他
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./backend/models:/app/models
+      - backend_logs:/app/logs
+      - backend_tmp:/tmp/rag_import
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "
+        echo 'Waiting for dependencies...' &&
+        sleep 10 &&
+        echo 'Starting uvicorn...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - electric-rag-net
+
+  # Celery Worker（独立容器，避免 API 阻塞，共享 GPU）
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: electric-rag-celery
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-electric_rag_2024}
+      MYSQL_DB: ${MYSQL_DB:-electric_rag}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      ES_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: 9200
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+      MINERU_API_URL: http://mineru:8001
+      MINERU_ENABLED: "true"
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      ARK_API_KEY: ${ARK_API_KEY:-your_api_key}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      LLM_MODEL: ${LLM_MODEL:-doubao-pro-32k}
+      CUDA_VISIBLE_DEVICES: "0"
+      RERANKER_USE_GPU: "true"
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./backend/models:/app/models
+      - backend_logs:/app/logs
+      - backend_tmp:/tmp/rag_import
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    networks:
+      - electric-rag-net
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: electric-rag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      TZ: Asia/Shanghai
+    networks:
+      - electric-rag-net
+
+volumes:
+  mysql_data:
+  redis_data:
+  qdrant_data:
+  es_data:
+  minio_data:
+  mineru_cache:
+  backend_logs:
+  backend_tmp:
+
+networks:
+  electric-rag-net:
+    driver: bridge

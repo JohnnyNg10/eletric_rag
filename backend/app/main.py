@@ -4,15 +4,34 @@ FastAPI Application Entry Point
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import logging.handlers
+import os
 
 from app.config import settings
 from app.db.session import init_db, check_db_connection
 
+# 确保临时上传目录存在
+import os
+os.makedirs("/tmp/rag_import", exist_ok=True)
+
 # 配置日志
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+_log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+_log_level = getattr(logging, settings.LOG_LEVEL)
+
+logging.basicConfig(level=_log_level, format=_log_format)
+
+if settings.LOG_FILE_ENABLED:
+    os.makedirs(os.path.dirname(settings.LOG_FILE_PATH), exist_ok=True)
+    _file_handler = logging.handlers.RotatingFileHandler(
+        settings.LOG_FILE_PATH,
+        maxBytes=settings.LOG_FILE_MAX_BYTES,
+        backupCount=settings.LOG_FILE_BACKUP_COUNT,
+        encoding='utf-8',
+    )
+    _file_handler.setLevel(_log_level)
+    _file_handler.setFormatter(logging.Formatter(_log_format))
+    logging.getLogger().addHandler(_file_handler)
+
 logger = logging.getLogger(__name__)
 
 # 创建 FastAPI 应用
@@ -77,6 +96,21 @@ async def startup_event():
         logger.info("Reranker models loaded successfully")
     except Exception as e:
         logger.warning(f"Reranker warmup failed (non-fatal): {e}")
+
+    # 4. 检查 MinerU API 可用性（非致命，服务不可用时回退 PyMuPDF）
+    if settings.MINERU_ENABLED:
+        try:
+            from app.core.document_processor.mineru_client import mineru_client
+            if mineru_client.health_check():
+                logger.info(f"MinerU API 就绪: {settings.MINERU_API_URL}")
+            else:
+                logger.warning(
+                    f"MinerU API 未就绪 ({settings.MINERU_API_URL})，"
+                    "文档解析将回退到 PyMuPDF。"
+                    "启动 MinerU 后重启应用或重新上传文档。"
+                )
+        except Exception as e:
+            logger.warning(f"MinerU 检查失败 (non-fatal): {e}")
 
     logger.info("Application started successfully")
 
