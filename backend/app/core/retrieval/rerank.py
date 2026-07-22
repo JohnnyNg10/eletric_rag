@@ -45,7 +45,7 @@ class RerankResult:
 
 class TwoStageReranker:
     """
-    两阶段重排器
+    两阶段重排器（支持本地/API双模式）
 
     粗排：bge-reranker-base (快速剪枝)
     精排：bge-reranker-large (精准排序)
@@ -79,6 +79,7 @@ class TwoStageReranker:
             enable_cache: 是否启用Redis缓存
             cache_ttl: 缓存TTL（秒）
         """
+        self.mode = settings.RERANKER_MODE.lower()  # "local" or "api"
         self.coarse_threshold = coarse_threshold
         self.fine_threshold = fine_threshold
         self.coarse_top_k = coarse_top_k
@@ -88,26 +89,54 @@ class TwoStageReranker:
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl
 
-        # 模型路径
-        self.coarse_model_path = coarse_model_path or self._get_model_path(settings.RERANKER_MODEL_BASE)
-        self.fine_model_path = fine_model_path or self._get_model_path(settings.RERANKER_MODEL_LARGE)
+        logger.info(f"[TwoStageReranker] Initializing in {self.mode.upper()} mode")
 
-        # 设备选择（优先GPU）
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"[TwoStageReranker] Using device: {self.device}")
+        if self.mode == "local":
+            # 模型路径
+            self.coarse_model_path = coarse_model_path or self._get_model_path(settings.RERANKER_MODEL_BASE)
+            self.fine_model_path = fine_model_path or self._get_model_path(settings.RERANKER_MODEL_LARGE)
 
-        # 延迟加载模型
-        self.coarse_model = None
-        self.coarse_tokenizer = None
-        self.fine_model = None
-        self.fine_tokenizer = None
+            # 设备选择（优先GPU）
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            logger.info(f"[TwoStageReranker] Using device: {self.device}")
 
-        self._load_models()
+            # 延迟加载模型
+            self.coarse_model = None
+            self.coarse_tokenizer = None
+            self.fine_model = None
+            self.fine_tokenizer = None
+
+            self._load_models()
+
+        elif self.mode == "api":
+            self.device = None
+            self.coarse_model = None
+            self.coarse_tokenizer = None
+            self.fine_model = None
+            self.fine_tokenizer = None
+            self.api_client = None
+            self._init_api_client()
+
+        else:
+            raise ValueError(f"Invalid RERANKER_MODE: {self.mode} (must be 'local' or 'api')")
 
     @property
     def _model_version(self) -> str:
+        if self.mode == "api":
+            return "api"
         path = getattr(self.fine_model, 'name_or_path', '') or self.fine_model_path
         return hashlib.md5(path.encode()).hexdigest()[:12]
+
+    def _init_api_client(self):
+        """初始化 API 客户端"""
+        from app.core.retrieval.rerank_api_client import RerankerAPIClient
+
+        try:
+            self.api_client = RerankerAPIClient()
+            logger.info("[TwoStageReranker] API client initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize API client: {e}")
+            raise
 
     def _get_model_path(self, model_name: str) -> str:
         """获取本地模型路径"""
@@ -211,6 +240,10 @@ class TwoStageReranker:
         Returns:
             粗排后的Top20结果
         """
+        # API 模式：使用远程 API 进行粗排
+        if self.mode == "api":
+            return await self._api_rerank(query, candidates, self.coarse_top_k, stage="coarse")
+
         # 降级策略：粗排模型不可用
         if self.coarse_model is None or self.coarse_tokenizer is None:
             logger.warning("[CoarseRerank] Model not available, using recall scores")
@@ -266,6 +299,12 @@ class TwoStageReranker:
         Returns:
             精排后的TopK结果
         """
+        # API 模式：使用远程 API 进行精排
+        if self.mode == "api":
+            chunk_results = [self._rerank_to_chunk_result(r) for r in candidates]
+            api_results = await self._api_rerank(query, chunk_results, top_k, stage="fine")
+            return api_results
+
         # 降级策略：精排模型不可用，使用粗排模型
         if self.fine_model is None or self.fine_tokenizer is None:
             if self.coarse_model is not None:
@@ -324,6 +363,57 @@ class TwoStageReranker:
             # 降级：使用粗排分数
             candidates.sort(key=lambda x: x.score, reverse=True)
             return candidates[:top_k]
+
+    async def _api_rerank(
+        self,
+        query: str,
+        candidates: List[ChunkResult],
+        top_k: int,
+        stage: str,
+    ) -> List[RerankResult]:
+        """
+        使用 API 进行重排序
+
+        Args:
+            query: 查询文本
+            candidates: 候选块列表
+            top_k: 保留数量
+            stage: 阶段标识（coarse/fine）
+
+        Returns:
+            重排后的结果
+        """
+        if self.api_client is None:
+            raise RuntimeError("API client not initialized")
+
+        if not candidates:
+            return []
+
+        try:
+            # 提取文档内容
+            documents = [c.content for c in candidates]
+
+            # 调用 API
+            results = await self.api_client.rerank(query, documents, top_k=top_k)
+
+            # 构造 RerankResult
+            rerank_results = []
+            for index, score in results:
+                if index < len(candidates):
+                    chunk = candidates[index]
+                    rerank_results.append(self._chunk_to_rerank_result(chunk, score))
+
+            logger.info(f"[{stage.capitalize()}Rerank API] {len(candidates)} → Top{len(rerank_results)}")
+            return rerank_results
+
+        except Exception as e:
+            logger.error(f"[{stage.capitalize()}Rerank API] Error: {e}", exc_info=True)
+            # 降级：使用召回分数
+            sorted_candidates = sorted(candidates, key=lambda c: c.score, reverse=True)
+            return [
+                self._chunk_to_rerank_result(c, c.score)
+                for c in sorted_candidates[:top_k]
+            ]
 
     async def _compute_scores(
         self,

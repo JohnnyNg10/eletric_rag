@@ -242,6 +242,12 @@ vim .env
 **关键配置** (`.env`):
 
 ```bash
+# Application
+APP_NAME=Electric RAG System
+DEBUG=True
+ENV=development
+API_V1_PREFIX=/api/v1
+
 # Database
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
@@ -252,43 +258,76 @@ MYSQL_DB=electric_rag
 # Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
 
 # Qdrant
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
+QDRANT_COLLECTION=documents
 
 # Elasticsearch
 ES_HOSTS=http://localhost:9200
-ELASTICSEARCH_HOST=localhost
-ELASTICSEARCH_PORT=9200
+ES_INDEX=documents
 
 # MinIO
 MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
-MINIO_SECURE=false
+MINIO_BUCKET=electric-rag
 
-# LLM API（必填！）
-ARK_API_KEY=your_doubao_api_key_here
+# LLM API（豆包 Pro - 必填！）
+ARK_API_KEY=eab97c56-c7fd-499e-a701-4f51bb84be96
 LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-LLM_MODEL=doubao-pro-32k
-
-# GPU 配置
-CUDA_VISIBLE_DEVICES=0
-RERANKER_USE_GPU=true
-RERANKER_BATCH_SIZE=32
-OCR_USE_GPU=true
+LLM_MODEL=ep-20260717095008-vr5r8
 
 # Celery
 CELERY_BROKER_URL=redis://localhost:6379/1
 CELERY_RESULT_BACKEND=redis://localhost:6379/2
 
-# 模型自动下载
-AUTO_DOWNLOAD_MODELS=true
+# Business Config
+MAX_RECALL_COUNT=20
+TOP_K_RESULTS=5
+CACHE_TTL=3600
+
+# Model Configuration
+MODELS_DIR=models
+EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
+RERANKER_MODEL_LARGE=BAAI/bge-reranker-large
+RERANKER_MODEL_BASE=BAAI/bge-reranker-base
+SPARSE_MODEL=naver/efficient-splade-VI-BT-large-query
+AUTO_DOWNLOAD_MODELS=True
+
+# Scanned PDF Processing
+ENABLE_SCANNED_PDF=true
+ENABLE_IMAGE_SEARCH=true
+ENABLE_VLM_DESCRIPTION=true
+
+# VLM API Configuration (火山引擎豆包多模态)
+VLM_PROVIDER=doubao
+DOUBAO_API_KEY=eab97c56-c7fd-499e-a701-4f51bb84be96
+DOUBAO_API_ENDPOINT=https://ark.cn-beijing.volces.com/api/v3/chat/completions
+DOUBAO_MODEL=ep-20260717161647-s9plq
+
+# 如需使用通义千问 VLM：
+# VLM_PROVIDER=qwen
+# QWEN_API_KEY=your-qwen-key
+# QWEN_MODEL=qwen-vl-plus
+
+# OCR Configuration
+OCR_USE_GPU=True
+OCR_CONFIDENCE_THRESHOLD=0.85
 
 # Security
-SECRET_KEY=your_random_32_chars_secret_key_change_this
+SECRET_KEY=your-secret-key-here-change-in-production
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
 ```
+
+**重要提醒**：
+- 生产环境请修改 `SECRET_KEY`
+- `ARK_API_KEY`、`LLM_MODEL`、`DOUBAO_API_KEY`、`DOUBAO_MODEL` 需替换为你的实际值
+- 数据库、Redis、Qdrant、ES、MinIO 配置与前面安装步骤保持一致
 
 ### 12. 安装 MinerU（可选）
 

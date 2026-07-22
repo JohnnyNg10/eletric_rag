@@ -300,6 +300,11 @@ class PDFParser:
             # 提取图片信息（MinerU 返回的是图片路径，需要读取实际文件）
             images = self._extract_images_from_content_list(content_list, pdf_path)
 
+            # pipeline 模式下 MinerU 不做 VLM 分析，调用 VLM API 补充图片语义描述
+            if images and settings.ENABLE_VLM_DESCRIPTION:
+                logger.info(f"MinerU pipeline 模式：调用 VLM API 为 {len(images)} 张图片生成语义描述")
+                images = asyncio.run(self._enrich_images_with_vlm(images))
+
             logger.info(
                 f"MinerU API 解析完成: {pdf_path.name}, "
                 f"内容长度={len(md_content)} 字符, "
@@ -400,6 +405,7 @@ class PDFParser:
                     "description": description,
                     "vlm_model": "mineru",
                     "vlm_confidence": 1.0 if description else 0.0,
+                    "_source_path": str(img_path),  # 供后续 VLM 增强直接读文件，处理完后去除
                 })
 
                 logger.debug(f"提取图片: {img_path.name}, 描述长度={len(description)}")
@@ -408,6 +414,49 @@ class PDFParser:
                 logger.warning(f"提取图片失败 (index={idx}): {e}")
 
         return images
+
+    async def _enrich_images_with_vlm(self, images: list) -> list:
+        """对 MinerU 提取的图片并行调用 VLM API，补充语义描述"""
+        if self.vlm_client is None:
+            from app.core.vlm.vlm_client import vlm_client as _vlm
+            self.vlm_client = _vlm
+
+        prompt = """请描述这张工程图片的技术内容。
+要求：
+1. 如果是结构图/示意图/流程图，描述其组成和关键元素
+2. 如果是照片，描述场景和重点对象
+3. 保持简洁专业，100字以内
+直接输出描述，无需前缀。"""
+
+        async def _enrich_one(img: dict) -> dict:
+            source_path = img.pop("_source_path", None)
+            tmp_path = None
+            try:
+                if source_path and Path(source_path).exists():
+                    call_path = source_path
+                else:
+                    # 没有原始文件路径，写临时文件
+                    ext = img.get("ext", "png")
+                    with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+                        tmp.write(img["bytes"])
+                        tmp_path = call_path = tmp.name
+
+                vlm_result = await self.vlm_client.generate_description(call_path, prompt)
+                if vlm_result and vlm_result.get("description"):
+                    img["description"] = vlm_result["description"]
+                    img["vlm_model"] = vlm_result.get("model", "vlm_api")
+                    img["vlm_confidence"] = vlm_result.get("confidence", 0.0)
+                    logger.debug(f"VLM 描述生成成功: 页{img['page']} 图{img['index']}")
+                else:
+                    logger.warning(f"VLM 描述生成失败: 页{img['page']} 图{img['index']} — {vlm_result.get('error')}")
+            except Exception as e:
+                logger.warning(f"VLM 增强异常: 页{img.get('page')} 图{img.get('index')}: {e}")
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            return img
+
+        return list(await asyncio.gather(*[_enrich_one(img) for img in images]))
 
     def _parse_text_pdf(self, doc: fitz.Document, pdf_path: Path) -> Dict:
         """解析文字版 PDF"""

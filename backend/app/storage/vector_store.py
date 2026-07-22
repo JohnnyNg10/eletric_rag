@@ -32,7 +32,7 @@ class VectorStore:
             port=settings.QDRANT_PORT,
             timeout=30
         )
-        self.collection_name = "documents"
+        self.collection_name = settings.QDRANT_COLLECTION
 
     def create_collection_if_not_exists(self):
         """创建 Collection（如果不存在）"""

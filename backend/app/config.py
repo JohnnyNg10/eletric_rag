@@ -126,6 +126,20 @@ class Settings(BaseSettings):
     SPARSE_MODEL: str = "naver/efficient-splade-VI-BT-large-query"  # 稀疏向量模型
     AUTO_DOWNLOAD_MODELS: bool = True  # 启动时自动下载缺失的模型
 
+    # Embedding/Reranker Mode (local / api)
+    EMBEDDING_MODE: str = "local"  # local: 本地模型, api: 远程API
+    RERANKER_MODE: str = "local"   # local: 本地模型, api: 远程API
+
+    # Embedding API Configuration (when EMBEDDING_MODE=api)
+    EMBEDDING_API_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_API_MODEL: str = "bge-large-zh-v1.5"  # API端模型名
+
+    # Reranker API Configuration (when RERANKER_MODE=api)
+    RERANKER_API_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
+    RERANKER_API_KEY: str = ""
+    RERANKER_API_MODEL: str = "bge-reranker-large"  # API端模型名
+
     # Scanned PDF Processing (扫描件PDF处理)
     ENABLE_SCANNED_PDF: bool = False  # 是否启用扫描件处理
     ENABLE_IMAGE_SEARCH: bool = False  # 是否启用图片检索

@@ -88,7 +88,16 @@ async def startup_event():
         logger.error(f"Failed to initialize database: {e}")
         raise
 
-    # 3. 预加载重排模型（避免首次请求承担模型加载延迟）
+    # 3. 初始化 Qdrant Collection（如果不存在则创建）
+    logger.info("Step 3/4: Initializing Qdrant collection...")
+    try:
+        from app.storage.vector_store import vector_store
+        vector_store.create_collection_if_not_exists()
+        logger.info("Qdrant collection ready")
+    except Exception as e:
+        logger.warning(f"Qdrant collection init failed (non-fatal): {e}")
+
+    # 4. 预加载重排模型（避免首次请求承担模型加载延迟）
     logger.info("Step 3/3: Warming up reranker models...")
     try:
         from app.core.retrieval.rerank import get_reranker

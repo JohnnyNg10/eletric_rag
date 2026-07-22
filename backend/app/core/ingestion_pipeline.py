@@ -15,7 +15,7 @@ from pathlib import Path
 from datetime import datetime
 
 from app.core.document_processor.parser import pdf_parser
-from app.core.document_processor.chunker import document_chunker, Chunk
+from app.core.document_processor.chunker import document_chunker, Chunk, compute_image_text_associations
 from app.core.document_processor.metadata_extractor import metadata_extractor
 from app.core.document_processor.classifier import document_classifier
 from app.core.embedding import embedder
@@ -96,6 +96,19 @@ class DocumentIngestionPipeline:
             logger.info("Step 1: Parsing PDF...")
             parsed = pdf_parser.parse_pdf(str(pdf_path))
 
+            # Step 1.5: 保存解析后的 Markdown 到本地（用于调试）
+            from pathlib import Path as PathlibPath
+            backend_dir = PathlibPath(__file__).parent.parent.parent  # backend/
+            debug_md_dir = backend_dir / "debug_markdown"
+            debug_md_dir.mkdir(exist_ok=True)
+            debug_md_path = debug_md_dir / f"{pdf_path.stem}.md"
+            try:
+                with open(debug_md_path, 'w', encoding='utf-8') as f:
+                    f.write(parsed['content'])
+                logger.info(f"Debug: Markdown saved to {debug_md_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save debug markdown: {e}")
+
             # Step 2: 元数据提取
             logger.info("Step 2: Extracting metadata...")
             metadata = metadata_extractor.extract_from_document(
@@ -151,9 +164,10 @@ class DocumentIngestionPipeline:
 
             # Step 6.5: 处理图片（VLM 模式）
             images_count = 0
+            image_chunk_data = []  # [(chunk_id, description, page, vector), ...]
             if parsed.get('images'):
                 logger.info(f"Step 6.5: Processing {len(parsed['images'])} images...")
-                images_count = self._process_images(parsed['images'], document_id, metadata, db)
+                images_count, image_chunk_data = self._process_images(parsed['images'], document_id, metadata, db)
                 document.image_count = images_count
                 db.commit()
 
@@ -167,9 +181,9 @@ class DocumentIngestionPipeline:
             )
             logger.info(f"Generated {len(chunks)} chunks")
 
-            # Step 8: 向量化 + 入库
+            # Step 8: 向量化 + 入库（含图文关联计算）
             logger.info("Step 8: Vectorizing and indexing chunks...")
-            indexed_count = self._process_chunks(chunks, db, document_id)
+            indexed_count = self._process_chunks(chunks, db, document_id, image_chunk_data)
 
             # Step 9: 更新文档处理状态
             document.process_status = 'completed'
@@ -252,17 +266,27 @@ class DocumentIngestionPipeline:
         document_id: int,
         metadata: Dict,
         db
-    ) -> int:
-        """处理 VLM 解析出的图片：MinIO 上传 + DB 记录 + 向量索引"""
+    ) -> tuple:
+        """
+        处理 VLM 解析出的图片：MinIO 上传 + DB 记录 + 向量索引
+
+        Returns:
+            (images_count, image_chunk_data)
+            image_chunk_data: [(chunk_id, description, page, dense_vector), ...]
+        """
         import tempfile
         import os
         import hashlib
 
         count = 0
+        image_chunk_data = []
+
         for img_info in images:
             try:
                 ext = img_info.get('ext', 'png')
                 description = img_info.get('description', '')
+                caption = img_info.get('caption', '')
+                figure_number = img_info.get('figure_number')
 
                 # 1. 写临时文件，上传到 MinIO
                 object_name = (
@@ -284,6 +308,8 @@ class DocumentIngestionPipeline:
                     minio_path=object_name,
                     page_number=img_info.get('page'),
                     image_index=img_info.get('index'),
+                    figure_number=figure_number,
+                    caption=caption,
                     file_size=len(img_info['bytes']),
                     vlm_description=description,
                     vlm_model=img_info.get('vlm_model', ''),
@@ -294,7 +320,15 @@ class DocumentIngestionPipeline:
 
                 # 3. 为图片创建可检索的 image_description Chunk
                 if description:
-                    content = f"[图片描述] 第{img_info['page']}页 图{img_info['index'] + 1}：{description}"
+                    # 组装内容：图号 + 图注 + VLM 描述
+                    content_parts = [f"[图片描述] 第{img_info['page']}页"]
+                    if figure_number:
+                        content_parts.append(f"{figure_number}")
+                    if caption:
+                        content_parts.append(f"：{caption}")
+                    content_parts.append(f"\n{description}")
+                    content = " ".join(content_parts)
+
                     content_hash = hashlib.sha256(content.encode()).hexdigest()
                     dense_vector = self.embedder.encode(content).tolist()
                     sparse_vector = self.embedder.encode_sparse(content)
@@ -314,6 +348,7 @@ class DocumentIngestionPipeline:
                         has_dense_vector=True,
                         has_sparse_vector=True,
                         meta_data={
+                            'document_title': metadata.get('title'),
                             'standard_no': metadata.get('standard_no'),
                             'category': metadata.get('category'),
                             'voltage_level': metadata.get('voltage_level'),
@@ -334,6 +369,8 @@ class DocumentIngestionPipeline:
                             "chunk_type": "child",
                             "content_type": "image_description",
                             "text": content,
+                            "minio_path": object_name,
+                            "image_id": db_image.id,
                             **{k: v for k, v in (metadata or {}).items() if v is not None}
                         }
                     }])
@@ -342,6 +379,7 @@ class DocumentIngestionPipeline:
                         "chunk_id": vector_id,
                         "doc_id": document_id,
                         "text": content,
+                        "content_type": "image_description",
                         "standard_no": metadata.get('standard_no'),
                         "category": metadata.get('category'),
                         "voltage_level": metadata.get('voltage_level')
@@ -350,6 +388,14 @@ class DocumentIngestionPipeline:
                     db_image.chunk_id = db_chunk.id
                     db.flush()
 
+                    # 记录用于后续图文关联
+                    image_chunk_data.append((
+                        db_chunk.id,
+                        description,
+                        img_info.get('page'),
+                        dense_vector
+                    ))
+
                 count += 1
             except Exception as e:
                 logger.error(
@@ -357,16 +403,29 @@ class DocumentIngestionPipeline:
                 )
 
         db.commit()
-        return count
+        return count, image_chunk_data
 
     def _process_chunks(
         self,
         chunks: List[Chunk],
         db,
-        document_id: int
+        document_id: int,
+        image_chunk_data: List[tuple] = None
     ) -> int:
-        """处理所有块：向量化 + 三库入库"""
+        """
+        处理所有块：向量化 + 图文关联计算 + 三库入库
+
+        Args:
+            chunks: 文档分块列表
+            db: 数据库会话
+            document_id: 文档 ID
+            image_chunk_data: [(chunk_id, description, page, dense_vector), ...]
+
+        Returns:
+            入库成功的 chunk 数量
+        """
         indexed_count = 0
+        image_chunk_data = image_chunk_data or []
 
         # 先插入父块，获取 ID
         parent_chunks = [c for c in chunks if c.chunk_type == "parent"]
@@ -374,28 +433,109 @@ class DocumentIngestionPipeline:
 
         parent_id_map = {}  # chunk.content_hash -> db_id
 
-        # 处理父块
+        # === 阶段 1：向量化所有块，收集向量 ===
+        logger.info(f"Vectorizing {len(chunks)} chunks...")
+
+        # 父块向量化
+        parent_vectors = []
         for chunk in parent_chunks:
+            dense_vector = self.embedder.encode(chunk.content).tolist()
+            parent_vectors.append((chunk, dense_vector))
+
+        # 子块向量化
+        child_vectors = []
+        for chunk in child_chunks:
+            dense_vector = self.embedder.encode(chunk.content).tolist()
+            child_vectors.append((chunk, dense_vector))
+
+        # === 阶段 2：计算图文关联 ===
+        associations = {}
+        if image_chunk_data and (parent_vectors or child_vectors):
+            logger.info("Computing image-text associations...")
+
+            # 收集文本块信息（父块 + 子块）
+            text_chunk_info = []
+            text_vectors_list = []
+
+            for chunk, vec in parent_vectors:
+                text_chunk_info.append((
+                    id(chunk),  # 临时 ID，后面替换为 db_id
+                    chunk.content,
+                    chunk.page_start,
+                    chunk.page_end
+                ))
+                text_vectors_list.append(vec)
+
+            for chunk, vec in child_vectors:
+                text_chunk_info.append((
+                    id(chunk),
+                    chunk.content,
+                    chunk.page_start,
+                    chunk.page_end
+                ))
+                text_vectors_list.append(vec)
+
+            # 收集图片块信息
+            image_chunk_info = [(cid, desc, page) for cid, desc, page, _ in image_chunk_data]
+            image_vectors_list = [vec for _, _, _, vec in image_chunk_data]
+
+            # 计算关联
+            temp_associations = compute_image_text_associations(
+                text_chunks=text_chunk_info,
+                image_chunks=image_chunk_info,
+                text_vectors=text_vectors_list,
+                image_vectors=image_vectors_list,
+                threshold=0.75
+            )
+
+            # 将临时 ID 映射构建为查找字典（稍后替换为真实 db_id）
+            temp_id_to_chunk = {}
+            for chunk, _ in parent_vectors + child_vectors:
+                temp_id_to_chunk[id(chunk)] = chunk
+
+            associations = temp_associations
+
+        # === 阶段 3：写入数据库 ===
+        logger.info("Indexing chunks to database...")
+
+        # 处理父块
+        for chunk, dense_vector in parent_vectors:
             try:
-                db_chunk, vector_id = self._index_single_chunk(chunk, db)
+                # 填充关联的图片 chunk_id
+                temp_id = id(chunk)
+                if temp_id in associations:
+                    chunk.related_chunk_ids = associations[temp_id]
+
+                db_chunk, vector_id = self._index_single_chunk(chunk, db, dense_vector)
                 parent_id_map[chunk.content_hash] = db_chunk.id
+
+                # 更新 associations 中的 temp_id 为真实 db_id
+                if temp_id in associations:
+                    associations[db_chunk.id] = associations.pop(temp_id)
+
                 indexed_count += 1
             except Exception as e:
                 logger.error(f"Failed to index parent chunk: {e}")
 
         # 处理子块（设置 parent_chunk_id）
-        for chunk in child_chunks:
+        for chunk, dense_vector in child_vectors:
             try:
                 # 查找父块 ID（通过章节匹配）
                 parent_db_id = self._find_parent_id(chunk, parent_id_map, parent_chunks)
                 if parent_db_id:
                     chunk.parent_chunk_id = parent_db_id
 
-                db_chunk, vector_id = self._index_single_chunk(chunk, db)
+                # 填充关联的图片 chunk_id
+                temp_id = id(chunk)
+                if temp_id in associations:
+                    chunk.related_chunk_ids = associations[temp_id]
+
+                db_chunk, vector_id = self._index_single_chunk(chunk, db, dense_vector)
                 indexed_count += 1
             except Exception as e:
                 logger.error(f"Failed to index child chunk: {e}")
 
+        logger.info(f"Indexed {indexed_count} chunks with associations")
         return indexed_count
 
     def _find_parent_id(
@@ -411,26 +551,33 @@ class DocumentIngestionPipeline:
                 return parent_id_map.get(parent.content_hash)
         return None
 
-    def _index_single_chunk(self, chunk: Chunk, db) -> tuple:
+    def _index_single_chunk(self, chunk: Chunk, db, dense_vector: List[float] = None) -> tuple:
         """
         单个块的完整索引流程
+
+        Args:
+            chunk: 要索引的块
+            db: 数据库会话
+            dense_vector: 预计算的稠密向量（可选）
 
         Returns:
             (db_chunk, vector_id)
         """
-        # 1. 生成稠密向量
-        dense_vector = self.embedder.encode(chunk.content).tolist()
+        # 1. 生成稠密向量（如果未提供）
+        if dense_vector is None:
+            dense_vector = self.embedder.encode(chunk.content).tolist()
 
         # 2. 生成稀疏向量（使用 SPLADE）
         sparse_vector = self.embedder.encode_sparse(chunk.content)
 
-        # 3. 插入 PostgreSQL
+        # 3. 插入 MySQL
         db_chunk = DBChunk(
             document_id=chunk.document_id,
             parent_chunk_id=chunk.parent_chunk_id,
             content=chunk.content,
             content_hash=chunk.content_hash,
             chunk_type=chunk.chunk_type,
+            content_type=chunk.content_type,
             page_start=chunk.page_start,
             page_end=chunk.page_end,
             chapter=chunk.chapter,
@@ -458,6 +605,7 @@ class DocumentIngestionPipeline:
                 "doc_id": chunk.document_id,
                 "chunk_id": db_chunk.id,
                 "chunk_type": chunk.chunk_type,
+                "content_type": chunk.content_type,
                 "text": chunk.content,
                 "chapter": chunk.chapter,
                 "clause": chunk.clause,
@@ -470,6 +618,7 @@ class DocumentIngestionPipeline:
             "chunk_id": vector_id,
             "doc_id": chunk.document_id,
             "text": chunk.content,
+            "content_type": chunk.content_type,
             "standard_no": chunk.meta_data.get('standard_no'),
             "clause": chunk.clause,
             "category": chunk.meta_data.get('category'),

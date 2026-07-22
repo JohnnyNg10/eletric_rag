@@ -1,0 +1,46 @@
+# Docker 忽略文件
+.git
+.gitignore
+.env
+.env.local
+*.log
+*.md
+docs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.uv/
+
+# Node
+node_modules/
+npm-debug.log*
+.vite/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# 数据目录
+models/
+qdrant_storage/
+output/
+电力国标PDF/
+logs/
+
+# 临时文件
+*.tmp
+*.bak
+*.cache

@@ -59,6 +59,7 @@
 - [17-运维管控层.md](./modules/17-运维管控层.md) - 监控、告警、日志、质量评测
 - [22-模型使用总结.md](./modules/22-模型使用总结.md) - AI模型使用汇总、调用链路、成本优化
 - [28-文字PDF-VLM导入设计.md](./modules/28-文字PDF-VLM导入设计.md) - 文字版PDF导入方案：PyMuPDF文本提取、pdfplumber表格→Markdown、VLM图片描述、MinIO存储、检索时图片链接回显
+- [29-图片检索增强设计.md](./modules/29-图片检索增强设计.md) - 图片检索增强：ChunkResult扩展图片字段、图片链接注入层、presigned URL策略、MD图注提取、重排加权
 
 ### 📊 流程与交互文档
 
@@ -118,6 +119,8 @@
 
 ## 更新记录
 
+- **2026-07-21**: 新增 [29-图片检索增强设计.md](./modules/29-图片检索增强设计.md) 图片检索增强完整方案：ChunkResult扩展图片字段、inject_image_links注入层、presigned URL/代理双策略、MD图注提取合并、重排加权、P0-P2实施计划
+- **2026-07-21**: 新增 Qdrant collection 自动创建（startup_event），修复"Collection `documents` doesn't exist"报错
 - **2026-07-17**: 新增 [28-文字PDF-VLM导入设计.md](./modules/28-文字PDF-VLM导入设计.md) 文字版PDF导入完整方案：PyMuPDF文本提取、pdfplumber表格→Markdown、VLM图片语义描述、MinIO存储、检索结果图片链接回显
 - **2026-07-16**: 新增 [27-异步改造分析.md](./backend/27-异步改造分析.md) 同步 I/O 阻塞 asyncio 事件循环全面分析：Redis/MySQL/ES/Qdrant/MinIO 改造优先级、迁移策略、预期吞吐提升 2-3x
 - **2026-07-16**: 新增 [24-快车道延迟诊断报告.md](./backend/24-快车道延迟诊断报告.md) 快车道152s延迟根因诊断与P0/P1优化方案（重复重排节省49s、category过滤修复节省7s）

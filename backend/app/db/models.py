@@ -122,7 +122,7 @@ class Chunk(Base):
 
     # 内容类型（支持图片描述、表格摘要）
     content_type = Column(
-        Enum('text', 'image_description', 'table_summary', name='content_type_enum'),
+        Enum('text', 'table', 'image_description', 'table_summary', name='content_type_enum'),
         nullable=False,
         default='text',
         comment="内容类型"

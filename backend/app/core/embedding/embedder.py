@@ -4,6 +4,7 @@
 支持：
 - 稠密向量：bge-large-zh-v1.5 (1024D)
 - 稀疏向量：SPLADE
+- 双模式：本地模型 / 远程 API
 """
 from typing import List, Dict, Union
 import numpy as np
@@ -13,12 +14,35 @@ logger = logging.getLogger(__name__)
 
 
 class Embedder:
-    """向量化嵌入器"""
+    """向量化嵌入器（支持本地/API双模式）"""
 
     def __init__(self):
+        from app.config import settings
+
+        self.mode = settings.EMBEDDING_MODE.lower()  # "local" or "api"
         self.dense_model = None
         self.sparse_model = None
-        self._load_models()
+        self.api_client = None
+
+        logger.info(f"[Embedder] Initializing in {self.mode.upper()} mode")
+
+        if self.mode == "local":
+            self._load_models()
+        elif self.mode == "api":
+            self._init_api_client()
+        else:
+            raise ValueError(f"Invalid EMBEDDING_MODE: {self.mode} (must be 'local' or 'api')")
+
+    def _init_api_client(self):
+        """初始化 API 客户端"""
+        from app.core.embedding.api_client import EmbeddingAPIClient
+
+        try:
+            self.api_client = EmbeddingAPIClient()
+            logger.info("[Embedder] API client initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize API client: {e}")
+            raise
 
     def _get_model_path(self, model_name: str) -> str:
         """
@@ -79,6 +103,22 @@ class Embedder:
         Returns:
             向量数组 (D,) 或 (N, D)
         """
+        # API 模式
+        if self.mode == "api":
+            if self.api_client is None:
+                raise RuntimeError("API client not initialized")
+
+            # API 客户端是异步的，需要在异步上下文中调用
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            return loop.run_until_complete(self.api_client.encode(text))
+
+        # 本地模式
         if self.dense_model is None:
             raise RuntimeError("Dense model not loaded")
 
@@ -112,6 +152,11 @@ class Embedder:
         Returns:
             稀疏向量 {"indices": [...], "values": [...]}（Qdrant 格式）
         """
+        # API 模式不支持稀疏向量
+        if self.mode == "api":
+            logger.warning("[Embedder] Sparse encoding not supported in API mode")
+            return {"indices": [], "values": []}
+
         if self.sparse_model is None:
             logger.warning("Sparse model not loaded, returning empty sparse vector")
             return {"indices": [], "values": []}
@@ -173,6 +218,21 @@ class Embedder:
         Returns:
             向量数组 (N, D)
         """
+        # API 模式
+        if self.mode == "api":
+            if self.api_client is None:
+                raise RuntimeError("API client not initialized")
+
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            return loop.run_until_complete(self.api_client.encode_batch(texts, batch_size))
+
+        # 本地模式
         if self.dense_model is None:
             raise RuntimeError("Dense model not loaded")
 

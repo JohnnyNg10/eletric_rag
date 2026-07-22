@@ -6,7 +6,7 @@
 - 标准文档：条款规则分块
 - 专业书籍：语义边界检测
 """
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import re
 import logging
 import hashlib
@@ -22,6 +22,7 @@ class Chunk:
         chunk_type: str,  # "parent" or "child"
         document_id: Optional[int] = None,
         parent_chunk_id: Optional[int] = None,
+        content_type: str = "text",  # "text", "table", "image_description"
         **metadata
     ):
         self.document_id = document_id
@@ -29,6 +30,7 @@ class Chunk:
         self.content = content
         self.content_hash = self._compute_hash(content)
         self.chunk_type = chunk_type
+        self.content_type = content_type
 
         # 位置信息
         self.page_start = metadata.get("page_start")
@@ -70,6 +72,7 @@ class Chunk:
             "content": self.content,
             "content_hash": self.content_hash,
             "chunk_type": self.chunk_type,
+            "content_type": self.content_type,
             "page_start": self.page_start,
             "page_end": self.page_end,
             "chapter": self.chapter,
@@ -121,8 +124,8 @@ class DocumentChunker:
         标准文档分块（按条款规则）
 
         规则：
-        1. 父块：章节级别（包含多个条款）
-        2. 子块：单个条款
+        1. 父块：章节级别（包含多个条款或整章内容）
+        2. 子块：单个条款（如果有）；如果无条款，则将整章内容作为子块
         """
         chunks = []
         lines = content.split("\n")
@@ -131,7 +134,13 @@ class DocumentChunker:
         current_section = None
         current_clause_lines = []
         chapter_child_chunks = []
+        chapter_content_lines = []  # 收集整章内容（无条款时使用）
         position = 0
+
+        # 调试统计
+        chapter_count = 0
+        section_count = 0
+        clause_count = 0
 
         for line in lines:
             line = line.strip()
@@ -140,29 +149,70 @@ class DocumentChunker:
 
             # 检测章（父块边界）
             if self._is_chapter(line):
+                chapter_count += 1
+                logger.debug(f"检测到章: {line[:50]}")
+
                 # 保存前一章
-                if current_chapter and chapter_child_chunks:
-                    parent_chunk = self._create_parent_chunk_standard(
-                        current_chapter,
-                        chapter_child_chunks,
-                        doc_metadata,
-                        document_id,
-                        position
-                    )
-                    chunks.append(parent_chunk)
-                    chunks.extend(chapter_child_chunks)
-                    position += 1
+                if current_chapter:
+                    if chapter_child_chunks:
+                        # 有子条款：正常处理
+                        parent_chunk = self._create_parent_chunk_standard(
+                            current_chapter,
+                            chapter_child_chunks,
+                            doc_metadata,
+                            document_id,
+                            position
+                        )
+                        chunks.append(parent_chunk)
+                        chunks.extend(chapter_child_chunks)
+                        position += 1
+                    elif chapter_content_lines:
+                        # 无子条款：将整章作为一个父块+一个子块
+                        full_content = "\n".join(chapter_content_lines)
+                        parent_chunk = Chunk(
+                            content=current_chapter + "\n\n" + full_content,
+                            chunk_type="parent",
+                            document_id=document_id,
+                            chapter=self._extract_chapter_number(current_chapter),
+                            position_in_doc=position,
+                            meta_data={
+                                "doc_title": doc_metadata.get("title"),
+                                "standard_no": doc_metadata.get("standard_no"),
+                                "chapter_title": current_chapter
+                            }
+                        )
+                        child_chunk = Chunk(
+                            content=full_content,
+                            chunk_type="child",
+                            document_id=document_id,
+                            chapter=self._extract_chapter_number(current_chapter),
+                            position_in_doc=position,
+                            meta_data={
+                                "doc_title": doc_metadata.get("title"),
+                                "standard_no": doc_metadata.get("standard_no"),
+                                "chapter_title": current_chapter
+                            }
+                        )
+                        chunks.append(parent_chunk)
+                        chunks.append(child_chunk)
+                        position += 1
 
                 current_chapter = line
                 chapter_child_chunks = []
                 current_clause_lines = []
+                chapter_content_lines = [line]
 
             # 检测节
             elif self._is_section(line):
+                section_count += 1
+                logger.debug(f"检测到节: {line[:50]}")
                 current_section = line
+                chapter_content_lines.append(line)
 
             # 检测条款（子块）
             elif self._is_clause(line):
+                clause_count += 1
+                logger.debug(f"检测到条款: {line[:50]}")
                 # 保存前一条款
                 if current_clause_lines:
                     child_chunk = self._create_child_chunk_standard(
@@ -177,14 +227,16 @@ class DocumentChunker:
                     position += 1
 
                 current_clause_lines = [line]
+                chapter_content_lines.append(line)
 
             else:
                 # 内容行
+                chapter_content_lines.append(line)
                 if current_clause_lines is not None:
                     current_clause_lines.append(line)
 
         # 保存最后一个条款
-        if current_clause_lines:
+        if current_clause_lines and len(current_clause_lines) > 1:
             child_chunk = self._create_child_chunk_standard(
                 current_clause_lines,
                 doc_metadata,
@@ -197,17 +249,49 @@ class DocumentChunker:
             position += 1
 
         # 保存最后一章
-        if current_chapter and chapter_child_chunks:
-            parent_chunk = self._create_parent_chunk_standard(
-                current_chapter,
-                chapter_child_chunks,
-                doc_metadata,
-                document_id,
-                position
-            )
-            chunks.append(parent_chunk)
-            chunks.extend(chapter_child_chunks)
+        if current_chapter:
+            if chapter_child_chunks:
+                parent_chunk = self._create_parent_chunk_standard(
+                    current_chapter,
+                    chapter_child_chunks,
+                    doc_metadata,
+                    document_id,
+                    position
+                )
+                chunks.append(parent_chunk)
+                chunks.extend(chapter_child_chunks)
+            elif chapter_content_lines:
+                # 最后一章无条款
+                full_content = "\n".join(chapter_content_lines)
+                parent_chunk = Chunk(
+                    content=full_content,
+                    chunk_type="parent",
+                    document_id=document_id,
+                    chapter=self._extract_chapter_number(current_chapter),
+                    position_in_doc=position,
+                    meta_data={
+                        "doc_title": doc_metadata.get("title"),
+                        "standard_no": doc_metadata.get("standard_no"),
+                        "chapter_title": current_chapter
+                    }
+                )
+                child_content = "\n".join(chapter_content_lines[1:]) if len(chapter_content_lines) > 1 else full_content
+                child_chunk = Chunk(
+                    content=child_content,
+                    chunk_type="child",
+                    document_id=document_id,
+                    chapter=self._extract_chapter_number(current_chapter),
+                    position_in_doc=position,
+                    meta_data={
+                        "doc_title": doc_metadata.get("title"),
+                        "standard_no": doc_metadata.get("standard_no"),
+                        "chapter_title": current_chapter
+                    }
+                )
+                chunks.append(parent_chunk)
+                chunks.append(child_chunk)
 
+        logger.info(f"分块统计: 章={chapter_count}, 节={section_count}, 条款={clause_count}, 最终chunks={len(chunks)}")
         return chunks
 
     def _chunk_textbook(self, content: str, doc_metadata: Dict, document_id: Optional[int]) -> List[Chunk]:
@@ -335,6 +419,7 @@ class DocumentChunker:
             r"^#\s+第\s*\d+\s*章",      # # 第 5 章
             r"^第\s*\d+\s*章",           # 第 5 章
             r"^\d+\s+[^\d\.]",          # 1 范围（数字+空格+非数字非点）
+            r"^#{1,2}\s+\d+\s+[^\d\.]", # ## 1 范围 / # 4 要求（带#前缀）
         ]
         for pattern in patterns:
             if re.match(pattern, line):
@@ -356,7 +441,7 @@ class DocumentChunker:
         """判断是否为条款"""
         patterns = [
             r"^#{2,4}\s+\d+\.\d+",           # ## 5.2.1 (标准格式)
-            r"^#{2,4}\s*\d{3,5}(?:\.\d+)?",  # ## 7314 或 ## 73141 (MinerU格式，3-5位数字)
+            r"^#{2,4}\s*\d{2,5}(?:\.\d+)?",  # ## 42 / ## 421 / ## 7314（MinerU格式，2-5位数字）
             r"^\d+\.\d+\.\d+\s",              # 5.2.1 (三级)
             r"^\d+\.\d+\s+[^\d]",             # 5.2 技术要求（二级，后面不是数字）
         ]
@@ -450,14 +535,14 @@ class DocumentChunker:
         """提取章节号"""
         if not title:
             return None
-        # 匹配 "第 5 章" 或 "5." 或 "1 范围"
+        # 匹配 "第 5 章" 或 "5." 或 "1 范围" 或 "## 1 范围"
         match = re.search(r"第?\s*(\d+)\s*章", title)
         if match:
             return match.group(1)
-        match = re.match(r"^#\s*(\d+)\.", title)
+        match = re.match(r"^#*\s*(\d+)\.", title)
         if match:
             return match.group(1)
-        match = re.match(r"^(\d+)\s+", title)
+        match = re.match(r"^#*\s*(\d+)\s+", title)
         if match:
             return match.group(1)
         return None
@@ -471,6 +556,74 @@ class DocumentChunker:
             return match.group(1)
         match = re.match(r"^##\s*(\d+\.\d+)", title)
         return match.group(1) if match else None
+
+
+def compute_image_text_associations(
+    text_chunks: List[Tuple[int, str, int, int]],
+    image_chunks: List[Tuple[int, str, int]],
+    text_vectors: List,
+    image_vectors: List,
+    threshold: float = 0.75
+) -> Dict[int, List[int]]:
+    """
+    计算图文语义关联
+
+    实现策略：
+    1. 物理邻近：文本块与前后1页内的图片建立关联
+    2. 语义相似：计算文本向量与图片描述向量的余弦相似度，≥ threshold 则关联
+
+    Args:
+        text_chunks: [(chunk_id, content, page_start, page_end), ...]
+        image_chunks: [(chunk_id, description, page_number), ...]
+        text_vectors: 文本块的稠密向量列表（与 text_chunks 顺序对应）
+        image_vectors: 图片描述的稠密向量列表（与 image_chunks 顺序对应）
+        threshold: 相似度阈值（默认 0.75）
+
+    Returns:
+        {text_chunk_id: [related_image_chunk_id, ...]}
+    """
+    import numpy as np
+
+    associations: Dict[int, List[int]] = {}
+
+    if not text_chunks or not image_chunks:
+        return associations
+
+    # 构建向量矩阵
+    text_matrix = np.array(text_vectors)  # shape: (N_text, dim)
+    image_matrix = np.array(image_vectors)  # shape: (N_img, dim)
+
+    # 归一化
+    text_norms = np.linalg.norm(text_matrix, axis=1, keepdims=True)
+    image_norms = np.linalg.norm(image_matrix, axis=1, keepdims=True)
+    text_matrix = text_matrix / (text_norms + 1e-8)
+    image_matrix = image_matrix / (image_norms + 1e-8)
+
+    # 计算余弦相似度矩阵 (N_text, N_img)
+    similarity_matrix = np.dot(text_matrix, image_matrix.T)
+
+    # 遍历每个文本块
+    for i, (text_id, text_content, text_page_start, text_page_end) in enumerate(text_chunks):
+        related_images = []
+
+        for j, (img_id, img_desc, img_page) in enumerate(image_chunks):
+            # 策略 1：物理邻近（前后1页）
+            if text_page_start and text_page_end and img_page:
+                if text_page_start - 1 <= img_page <= text_page_end + 1:
+                    if img_id not in related_images:
+                        related_images.append(img_id)
+                    continue
+
+            # 策略 2：语义相似度
+            sim = similarity_matrix[i, j]
+            if sim >= threshold:
+                if img_id not in related_images:
+                    related_images.append(img_id)
+
+        if related_images:
+            associations[text_id] = related_images
+
+    return associations
 
 
 # 全局实例
