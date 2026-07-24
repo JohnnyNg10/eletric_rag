@@ -253,3 +253,72 @@
 .time-info {
   color: var(--color-text-tertiary);
 }
+
+/* 引用中的图片展示 */
+.citation-images {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.citation-image-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.citation-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.citation-image-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.image-figure-number {
+  font-weight: 500;
+  color: var(--color-primary);
+}
+
+.image-caption-text {
+  color: var(--color-text-tertiary);
+}
+
+/* 引用详情中的图片展示 */
+.citation-detail-images {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.citation-detail-image-item {
+  margin-top: 12px;
+}
+
+.citation-detail-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 8px;
+}
+
+.citation-detail-image-info {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.citation-detail-image-info div {
+  margin: 4px 0;
+}

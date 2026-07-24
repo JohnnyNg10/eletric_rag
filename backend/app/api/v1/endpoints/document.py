@@ -222,12 +222,11 @@ async def delete_document(
 
     # 2. 删除 Qdrant 向量点
     try:
-        chunks = db.query(Chunk).filter(Chunk.document_id == document_id).all()
-        vector_ids = [c.vector_id for c in chunks if c.vector_id]
-        if vector_ids:
-            vector_store.delete_vectors(vector_ids)
-            deleted_counts["qdrant_points"] = len(vector_ids)
-            logger.info(f"已删除 {len(vector_ids)} 个 Qdrant 向量点")
+        chunk_count = db.query(Chunk).filter(Chunk.document_id == document_id).count()
+        if chunk_count:
+            vector_store.delete_by_doc_id(str(document_id))
+            deleted_counts["qdrant_points"] = chunk_count
+            logger.info(f"已删除 {chunk_count} 个 Qdrant 向量点")
     except Exception as e:
         logger.warning(f"删除 Qdrant 向量失败: {e}")
 

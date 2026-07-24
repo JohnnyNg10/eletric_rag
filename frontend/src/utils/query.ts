@@ -65,6 +65,7 @@ export function normalizeCitation(raw: any): Citation {
     clause: raw?.clause ? String(raw.clause) : null,
     content_preview: String(raw?.content_preview ?? raw?.content_snippet ?? ''),
     chunk_id: String(raw?.chunk_id ?? raw?.id ?? ''),
+    images: raw?.images ?? undefined,
   };
 }
 

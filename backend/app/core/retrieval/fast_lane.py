@@ -175,6 +175,12 @@ class FastLane:
         deduped_chunks = self._deduplicate_candidates(recalled_chunks)
         logger.info(f"[FastLane] After dedup: {len(deduped_chunks)} chunks ({len(recalled_chunks) - len(deduped_chunks)} removed)")
 
+        # 步骤2.6: 图片伴随召回 + 图片链接注入（确保生成层能看到配图）
+        from app.core.retrieval.image_link_injector import pull_along_images, inject_image_links
+        deduped_chunks = await pull_along_images(deduped_chunks, self.db)
+        deduped_chunks = await inject_image_links(deduped_chunks, self.db)
+        logger.info(f"[FastLane] After image injection: {len(deduped_chunks)} chunks")
+
         # 步骤3: 两阶段重排
         from app.storage.cache import get_cache_manager
         from dataclasses import asdict
@@ -238,6 +244,11 @@ class FastLane:
 
             # 内容去重（同首次召回一样）
             merged_chunks = self._deduplicate_candidates(merged_chunks)
+
+            # 图片伴随召回 + 图片链接注入（二次检索也需要）
+            from app.core.retrieval.image_link_injector import pull_along_images, inject_image_links
+            merged_chunks = await pull_along_images(merged_chunks, self.db)
+            merged_chunks = await inject_image_links(merged_chunks, self.db)
 
             # 检测是否有新 chunk：无新 chunk 则直接复用首轮重排结果，跳过二次重排
             original_ids = {c.chunk_id for c in deduped_chunks}
@@ -814,10 +825,18 @@ class FastLane:
             'section': result.section,
             'page_start': result.page_start,
             'page_end': result.page_end,
+            'content_type': result.content_type,
+            'image_id': result.image_id,
+            'image_url': result.image_url,
+            'image_page': result.image_page,
+            'image_figure_number': result.image_figure_number,
+            'image_caption': result.image_caption,
+            'referenced_images': result.referenced_images,
         }
 
     def _rerank_result_to_chunk_result(self, result: RerankResult) -> ChunkResult:
         """将RerankResult转换为ChunkResult（用于子块扩展）"""
+        from app.schemas.retrieval import ImageRef
         return ChunkResult(
             chunk_id=result.chunk_id,
             content=result.content,
@@ -833,5 +852,12 @@ class FastLane:
             section=result.section,
             page_start=result.page_start,
             page_end=result.page_end,
-            recall_source=result.recall_source
+            recall_source=result.recall_source,
+            content_type=result.content_type,
+            image_id=result.image_id,
+            image_url=result.image_url,
+            image_page=result.image_page,
+            image_figure_number=result.image_figure_number,
+            image_caption=result.image_caption,
+            referenced_images=[ImageRef(**r) for r in result.referenced_images],
         )

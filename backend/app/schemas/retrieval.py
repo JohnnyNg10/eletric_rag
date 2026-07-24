@@ -52,6 +52,9 @@ class ChunkResult(BaseModel):
     # 图片引用（场景 B：text/table Chunk 中的图号引用解析结果）
     referenced_images: List[ImageRef] = Field(default_factory=list, description="正文中引用的图片列表")
 
+    # 关联 Chunk ID 列表（入库时预计算的语义关联）
+    related_chunk_ids: List[int] = Field(default_factory=list, description="关联的 Chunk ID 列表")
+
     class Config:
         from_attributes = True
 

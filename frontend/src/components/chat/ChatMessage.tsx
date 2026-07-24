@@ -121,6 +121,27 @@ function CitationCard({ citation }: { citation: Citation }) {
       {citation.document_title && (
         <div className="citation-title">{citation.document_title}</div>
       )}
+      {/* 图片展示 */}
+      {citation.images && citation.images.length > 0 && (
+        <div className="citation-images">
+          {citation.images.map((img, idx) => (
+            <div key={img.image_id || idx} className="citation-image-item">
+              <img
+                src={img.url}
+                alt={img.caption || img.figure_number || '引用图片'}
+                className="citation-image"
+                loading="lazy"
+              />
+              {(img.figure_number || img.caption) && (
+                <div className="citation-image-caption">
+                  {img.figure_number && <span className="image-figure-number">{img.figure_number}</span>}
+                  {img.caption && <span className="image-caption-text">{img.caption}</span>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

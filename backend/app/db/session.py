@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # 创建数据库引擎
 engine = create_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=False,  # 禁用 SQL 语句日志输出
     pool_pre_ping=True,  # 自动重连
     pool_size=10,  # 连接池大小
     max_overflow=20,  # 最大溢出连接数

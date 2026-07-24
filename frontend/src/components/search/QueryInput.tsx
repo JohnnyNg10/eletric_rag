@@ -1,4 +1,4 @@
-import { forwardRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { forwardRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 
 interface QueryInputProps {
@@ -10,12 +10,15 @@ interface QueryInputProps {
   helperText?: string | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onClearCache?: () => Promise<void>;
 }
 
 const QueryInput = forwardRef<HTMLTextAreaElement, QueryInputProps>(function QueryInput(
-  { query, disabled, loading, warning, error, helperText, onChange, onSubmit },
+  { query, disabled, loading, warning, error, helperText, onChange, onSubmit, onClearCache },
   ref,
 ) {
+  const [clearing, setClearing] = useState(false);
+
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
 
 
@@ -24,6 +27,20 @@ const QueryInput = forwardRef<HTMLTextAreaElement, QueryInputProps>(function Que
       if (!disabled && !loading) {
         onSubmit();
       }
+    }
+  };
+
+  const handleClearCache = async () => {
+    if (!onClearCache || clearing) return;
+
+    try {
+      setClearing(true);
+      await onClearCache();
+      alert('缓存已清理');
+    } catch (err) {
+      alert(`清理缓存失败: ${err}`);
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -47,14 +64,27 @@ const QueryInput = forwardRef<HTMLTextAreaElement, QueryInputProps>(function Que
 
       <div className="query-toolbar">
         <div className="helper-text">{helperText || 'Enter 提交，Shift + Enter 换行'}</div>
-        <button
-          type="button"
-          className="primary-button large"
-          disabled={disabled || loading}
-          onClick={onSubmit}
-        >
-          {loading ? '分析中...' : '提交查询'}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {onClearCache && (
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={disabled || loading || clearing}
+              onClick={handleClearCache}
+              title="清空所有RAG缓存（调试用）"
+            >
+              {clearing ? '清理中...' : '清理缓存'}
+            </button>
+          )}
+          <button
+            type="button"
+            className="primary-button large"
+            disabled={disabled || loading}
+            onClick={onSubmit}
+          >
+            {loading ? '分析中...' : '提交查询'}
+          </button>
+        </div>
       </div>
 
       {warning ? <div className="warning-banner">{warning}</div> : null}

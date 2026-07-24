@@ -6,6 +6,7 @@ import { ConversationSidebar } from '../components/conversation/ConversationSide
 import { ChatMessageList } from '../components/chat/ChatMessageList';
 import { useAuthContext } from '../context/AuthContext';
 import { useConversation } from '../hooks/useConversation';
+import { clearCache } from '../api/query';
 import './SearchPage.css';
 
 export function SearchPage() {
@@ -26,6 +27,13 @@ export function SearchPage() {
     if (!draftQuery.trim()) return;
     await conversation.sendQuery(draftQuery);
     setDraftQuery('');
+  };
+
+  const handleClearCache = async () => {
+    if (!auth.accessToken) {
+      throw new Error('未登录');
+    }
+    await clearCache(auth.accessToken);
   };
 
   const handleSelectConversation = (id: string) => {
@@ -88,6 +96,7 @@ export function SearchPage() {
             helperText={helperText}
             onChange={setDraftQuery}
             onSubmit={handleSubmit}
+            onClearCache={handleClearCache}
           />
         </div>
       </div>

@@ -404,6 +404,49 @@ class CacheManager:
             logger.warning(f"[Cache] EXISTS failed key={key}: {e}")
             return False
 
+    def clear_all(self) -> Dict[str, Any]:
+        """
+        清空所有缓存（L1-L4 所有级别）
+
+        Returns:
+            清理结果统计
+        """
+        try:
+            # 获取所有缓存 key（按前缀分类）
+            prefixes = ["embedding:", "recall:", "rerank:", "generation:"]
+            deleted_counts = {}
+            total_deleted = 0
+
+            for prefix in prefixes:
+                pattern = f"{prefix}*"
+                keys = list(self.client.scan_iter(match=pattern, count=100))
+                if keys:
+                    deleted = self.client.delete(*keys)
+                    deleted_counts[prefix] = deleted
+                    total_deleted += deleted
+                else:
+                    deleted_counts[prefix] = 0
+
+            logger.info(f"[Cache] Cleared all caches: {deleted_counts}, total={total_deleted}")
+
+            # 重置统计计数器
+            self._hits.clear()
+            self._misses.clear()
+
+            return {
+                "success": True,
+                "total_deleted": total_deleted,
+                "by_level": deleted_counts,
+                "message": f"Successfully cleared {total_deleted} cache entries"
+            }
+        except Exception as e:
+            logger.error(f"[Cache] Failed to clear all caches: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": "Failed to clear cache"
+            }
+
 
 # 全局单例
 _cache_manager: Optional[CacheManager] = None

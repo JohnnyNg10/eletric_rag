@@ -403,3 +403,25 @@ export async function getConversationHistory(
 
   return items;
 }
+
+export interface ClearCacheResponse {
+  success: boolean;
+  total_deleted: number;
+  by_level: Record<string, number>;
+  message: string;
+}
+
+export async function clearCache(token: string): Promise<ClearCacheResponse> {
+  const raw = await requestJson<any>(
+    '/query/cache/clear',
+    { method: 'POST' },
+    { token, timeoutMs: 10000 },
+  );
+
+  return {
+    success: Boolean(raw?.success),
+    total_deleted: Number(raw?.total_deleted ?? 0),
+    by_level: raw?.by_level ?? {},
+    message: String(raw?.message ?? '缓存已清理'),
+  };
+}

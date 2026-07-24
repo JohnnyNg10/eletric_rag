@@ -90,6 +90,7 @@ async def execute_query(
             )
 
         # 正常返回：映射 citations 字段
+        from app.schemas.query import ImageInfo
         citations = [
             Citation(
                 index=c.get('index', i + 1),
@@ -98,6 +99,17 @@ async def execute_query(
                 clause=c.get('clause'),
                 content_snippet=c.get('content_snippet', ''),
                 document_title=c.get('document_title'),
+                images=[
+                    ImageInfo(
+                        image_id=img.get('image_id'),
+                        url=img.get('url'),
+                        caption=img.get('caption'),
+                        figure_number=img.get('figure_number'),
+                        vlm_description=img.get('vlm_description'),
+                        page_number=img.get('page_number') or 0
+                    )
+                    for img in c.get('images', [])
+                ]
             )
             for i, c in enumerate(result.get('citations') or [])
         ]
@@ -267,6 +279,50 @@ async def submit_feedback(
         query_log_id=query_log_id,
         feedback_score=request.feedback_score,
     )
+
+
+@router.post("/cache/clear", summary="清理缓存")
+async def clear_cache(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    清空所有 RAG 缓存（L1-L4 级别 + 语义缓存）。
+
+    适用场景：调试时需要用相同问题测试不同逻辑。
+    """
+    try:
+        from app.storage.cache import get_cache_manager
+        from app.storage.semantic_cache import get_semantic_cache_manager
+
+        # 清理 Redis 缓存（L1-L4）
+        cache = get_cache_manager()
+        redis_result = cache.clear_all()
+
+        # 清理语义缓存（Qdrant）
+        try:
+            semantic_cache = get_semantic_cache_manager()
+            semantic_cache.clear()
+            logger.info(f"[User {current_user.id}] Semantic cache cleared")
+            semantic_cleared = True
+        except Exception as e:
+            logger.warning(f"[User {current_user.id}] Failed to clear semantic cache: {e}")
+            semantic_cleared = False
+
+        logger.info(f"[User {current_user.id}] Cache cleared: Redis={redis_result}, Semantic={semantic_cleared}")
+
+        return {
+            "success": redis_result.get("success", False),
+            "total_deleted": redis_result.get("total_deleted", 0),
+            "by_level": redis_result.get("by_level", {}),
+            "semantic_cache_cleared": semantic_cleared,
+            "message": f"Successfully cleared {redis_result.get('total_deleted', 0)} Redis entries and semantic cache"
+        }
+    except Exception as e:
+        logger.error(f"[User {current_user.id}] Failed to clear cache: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"清理缓存失败: {str(e)}"
+        )
 
 
 @router.get("/history", response_model=QueryHistoryResponse, summary="查询历史")

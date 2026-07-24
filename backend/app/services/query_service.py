@@ -55,6 +55,60 @@ class QueryService:
         self.query_log_repo = QueryLogRepository(db) if db else None
         self.coreference_resolver = CoreferenceResolver()
 
+    def _extract_images_from_rerank_result(self, rerank_result) -> List[Dict[str, Any]]:
+        """
+        从 RerankResult 中提取图片信息（已由 inject_image_links 注入）
+
+        Args:
+            rerank_result: RerankResult 对象
+
+        Returns:
+            图片信息列表
+        """
+        if not rerank_result:
+            return []
+
+        images = []
+
+        # 调试日志：查看 rerank_result 的结构
+        logger.debug(f"[ImageExtract] chunk_id={getattr(rerank_result, 'chunk_id', None)}, "
+                    f"content_type={getattr(rerank_result, 'content_type', None)}, "
+                    f"has_image_url={hasattr(rerank_result, 'image_url') and rerank_result.image_url is not None}, "
+                    f"has_referenced_images={hasattr(rerank_result, 'referenced_images') and len(rerank_result.referenced_images) > 0}")
+
+        # 场景 A：image_description 类型的 chunk，直接有 image_url
+        if rerank_result.content_type == "image_description" and rerank_result.image_url:
+            img_data = {
+                'image_id': rerank_result.image_id,
+                'url': rerank_result.image_url,
+                'caption': rerank_result.image_caption,
+                'figure_number': rerank_result.image_figure_number,
+                'page_number': rerank_result.image_page
+            }
+            images.append(img_data)
+            logger.info(f"[ImageExtract] Added image_description: {img_data['figure_number']} from chunk {rerank_result.chunk_id}")
+
+        # 场景 B：text/table 类型的 chunk，可能有 referenced_images
+        if rerank_result.referenced_images:
+            logger.info(f"[ImageExtract] Processing {len(rerank_result.referenced_images)} referenced_images from chunk {rerank_result.chunk_id}")
+            for ref_img in rerank_result.referenced_images:
+                # referenced_images 是 List[Dict]（由 _chunk_to_rerank_result 转换而来）
+                if isinstance(ref_img, dict) and ref_img.get('image_url'):
+                    img_data = {
+                        'image_id': ref_img.get('image_id'),
+                        'url': ref_img.get('image_url'),
+                        'caption': ref_img.get('caption'),
+                        'figure_number': ref_img.get('figure_number'),
+                        'page_number': ref_img.get('page_number')
+                    }
+                    images.append(img_data)
+                    logger.info(f"[ImageExtract] Added referenced_image: {img_data['figure_number']}")
+
+        if images:
+            logger.info(f"[ImageExtract] Total {len(images)} images extracted from chunk {getattr(rerank_result, 'chunk_id', 'unknown')}")
+
+        return images
+
     def _get_chunk_images(self, chunk_id: int, document_id: int) -> List[Dict[str, Any]]:
         """
         获取 chunk 关联的图片信息
@@ -291,7 +345,13 @@ class QueryService:
                             clause=chunk.clause,
                             score=chunk.score,
                             recall_source='slow_lane',
-                            document_title=chunk.document_title
+                            document_title=chunk.document_title,
+                            content_type=chunk.content_type,
+                            image_id=chunk.image_id,
+                            image_url=chunk.image_url,
+                            image_figure_number=chunk.image_figure_number,
+                            image_caption=chunk.image_caption,
+                            referenced_images=[r.model_dump() for r in chunk.referenced_images],
                         ))
                     elif isinstance(chunk, dict):
                         chunks_for_generation.append(RerankResult(
@@ -333,16 +393,25 @@ class QueryService:
                     # 为缓存的 citations 补充图片信息
                     for citation in citations:
                         if isinstance(citation, dict) and 'chunk_id' in citation:
-                            # 找到对应的 chunk 获取 document_id
-                            doc_id = 0
+                            # 找到对应的 chunk 获取图片信息
                             for chunk in chunks_for_generation:
                                 if chunk.chunk_id == citation['chunk_id']:
-                                    doc_id = chunk.document_id
+                                    citation['images'] = self._extract_images_from_rerank_result(chunk)
                                     break
-                            citation['images'] = self._get_chunk_images(citation['chunk_id'], doc_id)
                     generation_time = 0  # 缓存命中，生成时间为0
                     cache_hit = True
                     semantic_cache_hit = True
+
+                    # 统计图片召回情况
+                    total_images = sum(len(c.get('images', [])) for c in citations)
+                    citations_with_images = sum(1 for c in citations if c.get('images'))
+                    logger.info(f"[User {user_id}] Semantic cache hit - Image recall: {total_images} images in {citations_with_images}/{len(citations)} citations")
+
+                    # 调试：打印第一个有图片的 citation
+                    for c in citations:
+                        if c.get('images'):
+                            logger.info(f"[Debug] Citation with images: chunk_id={c.get('chunk_id')}, images={c.get('images')}")
+                            break
 
             # 传统 L4 精确匹配缓存（semantic cache 未命中时）
             if not semantic_cache_hit:
@@ -356,15 +425,18 @@ class QueryService:
                     # 为缓存的 citations 补充图片信息
                     for citation in citations:
                         if isinstance(citation, dict) and 'chunk_id' in citation:
-                            # 找到对应的 chunk 获取 document_id
-                            doc_id = 0
+                            # 找到对应的 chunk 获取图片信息
                             for chunk in chunks_for_generation:
                                 if chunk.chunk_id == citation['chunk_id']:
-                                    doc_id = chunk.document_id
+                                    citation['images'] = self._extract_images_from_rerank_result(chunk)
                                     break
-                            citation['images'] = self._get_chunk_images(citation['chunk_id'], doc_id)
                     generation_time = cached_gen.get("generation_time_ms", 0)
                     cache_hit = True
+
+                    # 统计图片召回情况
+                    total_images = sum(len(c.get('images', [])) for c in citations)
+                    citations_with_images = sum(1 for c in citations if c.get('images'))
+                    logger.info(f"[User {user_id}] L4 cache hit - Image recall: {total_images} images in {citations_with_images}/{len(citations)} citations")
                 else:
                     generation_result = await self.generator.generate(
                         query=preprocessing_output.optimized_query,
@@ -381,9 +453,8 @@ class QueryService:
                             'clause': c.clause,
                             'content_snippet': c.content_snippet,
                             'document_title': c.document_title,
-                            'images': self._get_chunk_images(
-                                c.chunk_id,
-                                chunks_for_generation[c.index - 1].document_id if c.index <= len(chunks_for_generation) else 0
+                            'images': self._extract_images_from_rerank_result(
+                                chunks_for_generation[c.index - 1] if c.index <= len(chunks_for_generation) else None
                             )
                         }
                         for c in generation_result.citations
@@ -391,6 +462,15 @@ class QueryService:
                     answer = generation_result.answer
                     generation_time = generation_result.generation_time
                     cache_hit = False
+
+                    # 统计图片召回情况
+                    total_images = sum(len(c['images']) for c in citations)
+                    citations_with_images = sum(1 for c in citations if c['images'])
+                    logger.info(f"[User {user_id}] Image recall: {total_images} images in {citations_with_images}/{len(citations)} citations")
+
+                    # 调试：打印 citations 数据结构
+                    import json
+                    logger.info(f"[Debug] Full citations data: {json.dumps(citations, ensure_ascii=False, indent=2)}")
 
                     # 存储到传统 L4 缓存
                     cache.set_generation(

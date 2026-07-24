@@ -516,6 +516,7 @@ class DocumentIngestionPipeline:
                 indexed_count += 1
             except Exception as e:
                 logger.error(f"Failed to index parent chunk: {e}")
+                db.rollback()  # 回滚会话以继续处理后续块
 
         # 处理子块（设置 parent_chunk_id）
         for chunk, dense_vector in child_vectors:
@@ -534,6 +535,7 @@ class DocumentIngestionPipeline:
                 indexed_count += 1
             except Exception as e:
                 logger.error(f"Failed to index child chunk: {e}")
+                db.rollback()  # 回滚会话以继续处理后续块
 
         logger.info(f"Indexed {indexed_count} chunks with associations")
         return indexed_count
@@ -609,6 +611,7 @@ class DocumentIngestionPipeline:
                 "text": chunk.content,
                 "chapter": chunk.chapter,
                 "clause": chunk.clause,
+                "related_chunk_ids": chunk.related_chunk_ids or [],
                 **chunk.meta_data
             }
         }])
@@ -619,6 +622,7 @@ class DocumentIngestionPipeline:
             "doc_id": chunk.document_id,
             "text": chunk.content,
             "content_type": chunk.content_type,
+            "related_chunk_ids": chunk.related_chunk_ids or [],
             "standard_no": chunk.meta_data.get('standard_no'),
             "clause": chunk.clause,
             "category": chunk.meta_data.get('category'),

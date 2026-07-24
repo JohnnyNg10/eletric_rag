@@ -275,22 +275,24 @@ class VectorStore:
     def delete_by_doc_id(self, doc_id: str) -> bool:
         """删除文档的所有向量点"""
         try:
+            # Qdrant 中 doc_id 存储为整数，需要转换类型
+            doc_id_int = int(doc_id)
             self.client.delete(
                 collection_name=self.collection_name,
                 points_selector=Filter(
                     must=[
                         FieldCondition(
                             key="doc_id",
-                            match=MatchValue(value=doc_id)
+                            match=MatchValue(value=doc_id_int)
                         )
                     ]
                 )
             )
-            logger.info(f"Deleted all points for doc_id: {doc_id}")
+            logger.info(f"Deleted all points for doc_id: {doc_id_int}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to delete points: {e}")
+            logger.error(f"Failed to delete points for doc_id {doc_id}: {e}")
             return False
 
     def get_collection_info(self) -> Dict[str, Any]:

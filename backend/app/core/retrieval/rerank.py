@@ -6,7 +6,7 @@
 2. 精排：bge-reranker-large (Top20 → Top5)
 """
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 import torch
 import logging
@@ -14,7 +14,7 @@ import hashlib
 import asyncio
 from pathlib import Path
 
-from app.schemas.retrieval import ChunkResult
+from app.schemas.retrieval import ChunkResult, ImageRef  # ImageRef used in _rerank_to_chunk_result
 from app.storage.cache import cache
 from app.config import settings
 
@@ -41,6 +41,16 @@ class RerankResult:
     section: Optional[str] = None
     page_start: Optional[int] = None
     page_end: Optional[int] = None
+
+    # 内容类型 + 图片信息（inject_image_links 注入后必须透传到生成层）
+    content_type: Optional[str] = None
+    image_id: Optional[int] = None
+    image_url: Optional[str] = None
+    image_page: Optional[int] = None
+    image_figure_number: Optional[str] = None
+    image_caption: Optional[str] = None
+    # 存为 dict 而非 Pydantic 对象，确保 dataclasses.asdict() 和 JSON 序列化正常
+    referenced_images: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class TwoStageReranker:
@@ -519,15 +529,31 @@ class TwoStageReranker:
         """生成查询的MD5哈希"""
         return hashlib.md5(query.encode("utf-8")).hexdigest()
 
+    def _apply_type_boost(self, chunk: ChunkResult, score: float) -> float:
+        """
+        根据内容类型应用分数提权
+
+        工程标准中图表信息量高，适当提权防止纯文本偏置导致图片沉底
+        """
+        TYPE_BOOST = {
+            "text": 1.0,
+            "table": 1.05,
+            "image_description": 1.08,
+        }
+        boost = TYPE_BOOST.get(chunk.content_type, 1.0)
+        return score * boost
+
     def _chunk_to_rerank_result(self, chunk: ChunkResult, score: float) -> RerankResult:
-        """ChunkResult 转换为 RerankResult"""
+        """ChunkResult 转换为 RerankResult（应用类型提权）"""
+        boosted_score = self._apply_type_boost(chunk, score)
+
         return RerankResult(
             chunk_id=chunk.chunk_id,
             content=chunk.content,
             document_id=chunk.document_id,
             standard_no=chunk.standard_no,
             clause=chunk.clause,
-            score=score,
+            score=boosted_score,
             recall_source=chunk.recall_source or "unknown",
             document_title=chunk.document_title,
             doc_type=chunk.doc_type,
@@ -537,6 +563,13 @@ class TwoStageReranker:
             section=chunk.section,
             page_start=chunk.page_start,
             page_end=chunk.page_end,
+            content_type=chunk.content_type,
+            image_id=chunk.image_id,
+            image_url=chunk.image_url,
+            image_page=chunk.image_page,
+            image_figure_number=chunk.image_figure_number,
+            image_caption=chunk.image_caption,
+            referenced_images=[r.model_dump() for r in chunk.referenced_images],
         )
 
     def _rerank_to_chunk_result(self, rerank: RerankResult) -> ChunkResult:
@@ -557,6 +590,13 @@ class TwoStageReranker:
             page_end=rerank.page_end,
             recall_source=rerank.recall_source,
             document_title=rerank.document_title,
+            content_type=rerank.content_type,
+            image_id=rerank.image_id,
+            image_url=rerank.image_url,
+            image_page=rerank.image_page,
+            image_figure_number=rerank.image_figure_number,
+            image_caption=rerank.image_caption,
+            referenced_images=[ImageRef(**r) for r in rerank.referenced_images],
         )
 
     def _fallback_to_recall_scores(

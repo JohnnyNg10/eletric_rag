@@ -52,3 +52,47 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+
+# Vector storage (runtime data)
+qdrant_storage/
+
+# Output directories
+output/
+backend/debug_markdown/
+backend/mineru_env/
+
+# MinerU runtime/build artifacts
+MinerU/bundle/
+MinerU/output/
+MinerU/*.pdf
+MinerU/.venv/
+MinerU/mineru.egg-info/
+MinerU/result.json
+
+# Claude local settings
+.claude/settings.local.json
+
+# Temporary/debug files
+*.json.bak
+backend/response.json
+backend/api_response_debug.json
+backend/temp_downloaded.md
+backend/test_chunk_result.txt
+
+# Test PDFs (large files)
+*.pdf
+!docs/**/*.pdf
+
+# Markdown conversions
+*.md
+!README.md
+!docs/**/*.md
+!CLAUDE.md
+!*.example.md
+!RAG系统功能提升建议.md

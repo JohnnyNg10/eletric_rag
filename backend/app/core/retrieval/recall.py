@@ -102,7 +102,10 @@ class VectorRecall:
                     page_start=payload.get('page_start'),
                     page_end=payload.get('page_end'),
                     # 召回来源
-                    recall_source="vector"
+                    recall_source="vector",
+                    # 图片相关
+                    content_type=payload.get('content_type', 'text'),
+                    related_chunk_ids=payload.get('related_chunk_ids', [])
                 )
                 chunk_results.append(chunk_result)
 
@@ -284,7 +287,10 @@ class KeywordRecall:
                     # 位置信息
                     clause=source.get('clause'),
                     # 召回来源
-                    recall_source="keyword"
+                    recall_source="keyword",
+                    # 图片相关
+                    content_type=source.get('content_type', 'text'),
+                    related_chunk_ids=source.get('related_chunk_ids', [])
                 )
                 chunk_results.append(chunk_result)
 
@@ -604,7 +610,9 @@ class StructuredRecall:
             section=chunk.section,
             page_start=chunk.page_start,
             page_end=chunk.page_end,
-            recall_source="structured"
+            recall_source="structured",
+            related_chunk_ids=chunk.related_chunk_ids or [],
+            content_type=chunk.content_type or "text"
         )
 
 

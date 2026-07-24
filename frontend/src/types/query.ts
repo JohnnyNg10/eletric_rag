@@ -57,6 +57,15 @@ export interface QueryExecutionRequest {
   cache_strategy?: 'exact' | 'semantic';
 }
 
+export interface ImageInfo {
+  image_id: number;
+  url: string;
+  caption?: string | null;
+  figure_number?: string | null;
+  vlm_description?: string | null;
+  page_number: number;
+}
+
 export interface Citation {
   id: number;
   index?: number;
@@ -68,6 +77,7 @@ export interface Citation {
   content_snippet?: string;
   document_title?: string;
   chunk_id: string;
+  images?: ImageInfo[];
 }
 
 export interface QueryResultMeta {

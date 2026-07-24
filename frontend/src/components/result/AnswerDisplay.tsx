@@ -106,6 +106,28 @@ export default function AnswerDisplay({
                     {citation.clause || '未提供条款号'}
                   </div>
                   <div className="citation-preview">{citation.content_preview || '暂无片段预览'}</div>
+
+                  {/* 图片展示 */}
+                  {citation.images && citation.images.length > 0 && (
+                    <div className="citation-images">
+                      {citation.images.map((img, idx) => (
+                        <div key={img.image_id || idx} className="citation-image-item">
+                          <img
+                            src={img.url}
+                            alt={img.caption || img.figure_number || '引用图片'}
+                            className="citation-image"
+                            loading="lazy"
+                          />
+                          {(img.figure_number || img.caption) && (
+                            <div className="citation-image-caption">
+                              {img.figure_number && <span className="image-figure-number">{img.figure_number}</span>}
+                              {img.caption && <span className="image-caption-text">{img.caption}</span>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </button>
             ))}
@@ -122,6 +144,29 @@ export default function AnswerDisplay({
             <div><strong>条款：</strong>{selectedCitation.clause || '未提供'}</div>
             <div><strong>Chunk ID：</strong>{selectedCitation.chunk_id || '未提供'}</div>
             <div className="citation-preview detail">{selectedCitation.content_preview || '暂无预览内容'}</div>
+
+            {/* 引用详情中的图片展示 */}
+            {selectedCitation.images && selectedCitation.images.length > 0 && (
+              <div className="citation-detail-images">
+                <div><strong>相关图片：</strong></div>
+                {selectedCitation.images.map((img, idx) => (
+                  <div key={img.image_id || idx} className="citation-detail-image-item">
+                    <img
+                      src={img.url}
+                      alt={img.caption || img.figure_number || '引用图片'}
+                      className="citation-detail-image"
+                    />
+                    {(img.figure_number || img.caption) && (
+                      <div className="citation-detail-image-info">
+                        {img.figure_number && <div><strong>图号：</strong>{img.figure_number}</div>}
+                        {img.caption && <div><strong>图注：</strong>{img.caption}</div>}
+                        {img.page_number && <div><strong>页码：</strong>第 {img.page_number} 页</div>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       ) : null}

@@ -297,8 +297,12 @@ class PDFParser:
 
             logger.info(f"MinerU 返回类型检查: md_content类型={type(md_content).__name__}, content_list类型={type(content_list).__name__}, content_list长度={len(content_list) if isinstance(content_list, (list, str)) else 'N/A'}")
 
-            # 提取图片信息（MinerU 返回的是图片路径，需要读取实际文件）
-            images = self._extract_images_from_content_list(content_list, pdf_path)
+            # 从 Markdown 文件中提取图片引用（MinerU 的 content_list 可能不包含图片二进制数据）
+            images = self._extract_images_from_markdown(md_content, pdf_path)
+
+            # 如果提取失败，尝试从 content_list 提取（兼容旧版）
+            if not images:
+                images = self._extract_images_from_content_list(content_list, pdf_path)
 
             # pipeline 模式下 MinerU 不做 VLM 分析，调用 VLM API 补充图片语义描述
             if images and settings.ENABLE_VLM_DESCRIPTION:
@@ -329,6 +333,182 @@ class PDFParser:
             result = self._parse_text_pdf(_doc, pdf_path)
             _doc.close()
             return result
+
+    def _extract_images_from_content_list(self, content_list: list, pdf_path: Path) -> list:
+        """
+        从 MinerU 的 content_list 中提取图片信息
+
+        Args:
+            content_list: MinerU 返回的结构化内容列表
+            pdf_path: PDF 文件路径
+
+        Returns:
+            图片列表 [{"page": 1, "index": 0, "bytes": b"...", "ext": "png", "description": "..."}]
+        """
+        images = []
+
+        if not content_list:
+            return images
+
+        # 如果 content_list 是 JSON 字符串，先解析
+        if isinstance(content_list, str):
+            try:
+                import json
+                content_list = json.loads(content_list)
+            except Exception as e:
+                logger.warning(f"content_list JSON 解析失败: {e}")
+                return images
+
+        # MinerU 的 content_list 结构：
+        # [{"type": "image", "img_path": "images/xxx.jpg", "content": "AI描述", ...}, ...]
+        for idx, item in enumerate(content_list):
+            # 跳过非字典类型的元素
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "image":
+                continue
+
+            try:
+                img_path_str = item.get("img_path", "")
+                if not img_path_str:
+                    continue
+
+                # MinerU 生成的图片通常在 PDF 所在目录的输出子目录中
+                # 实际路径需要根据 MinerU 的输出配置确定
+                # 这里简化处理：如果是相对路径，从 PDF 目录查找
+                img_path = Path(img_path_str)
+                if not img_path.is_absolute():
+                    # 尝试从 PDF 同目录下的可能输出目录查找
+                    possible_dirs = [
+                        pdf_path.parent / "output" / "images",
+                        pdf_path.parent / "images",
+                        pdf_path.parent,
+                    ]
+                    for base_dir in possible_dirs:
+                        full_path = base_dir / img_path.name
+                        if full_path.exists():
+                            img_path = full_path
+                            break
+
+                if not img_path.exists():
+                    logger.warning(f"图片文件不存在: {img_path}")
+                    continue
+
+                # 读取图片字节
+                with open(img_path, "rb") as f:
+                    img_bytes = f.read()
+
+                ext = img_path.suffix.lstrip(".")
+                description = item.get("content", "")  # MinerU VLM 生成的描述
+
+                images.append({
+                    "page": item.get("page_number", 0),  # MinerU 可能提供页码
+                    "index": idx,
+                    "bytes": img_bytes,
+                    "ext": ext or "png",
+                    "description": description,
+                    "vlm_model": "mineru",
+                    "vlm_confidence": 1.0 if description else 0.0,
+                    "_source_path": str(img_path),  # 供后续 VLM 增强直接读文件，处理完后去除
+                })
+
+                logger.debug(f"提取图片: {img_path.name}, 描述长度={len(description)}")
+
+            except Exception as e:
+                logger.warning(f"提取图片失败 (index={idx}): {e}")
+
+        return images
+
+    def _extract_images_from_markdown(self, md_content: str, pdf_path: Path) -> list:
+        """
+        从 Markdown 内容中提取图片引用，并尝试读取图片文件
+
+        Args:
+            md_content: Markdown 文本内容
+            pdf_path: PDF 文件路径
+
+        Returns:
+            图片列表 [{"page": 0, "index": 0, "bytes": b"...", "ext": "png", ...}]
+        """
+        import re
+        images = []
+
+        # 匹配 Markdown 图片语法: ![可选描述](图片路径)
+        # 示例: ![](images/e9c5752034733b41f26df35d0f1e66fdc7e53c718e53c67b651fa6e7861c4be8.jpg)
+        img_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
+        matches = img_pattern.findall(md_content)
+
+        if not matches:
+            logger.debug("Markdown 中未找到图片引用")
+            return images
+
+        logger.info(f"从 Markdown 中找到 {len(matches)} 个图片引用")
+
+        # MinerU 服务的输出目录（包含任务ID子目录）
+        mineru_output = Path("D:/dl/MinerU/output")
+
+        # 可能的图片搜索目录
+        search_dirs = [
+            pdf_path.parent / "images",  # 与PDF同级
+            pdf_path.parent / "output" / "images",
+            pdf_path.parent,
+            Path("debug_markdown") / "images",  # 调试目录
+            Path.cwd() / "images",
+        ]
+
+        for idx, (caption, img_rel_path) in enumerate(matches):
+            try:
+                img_path = Path(img_rel_path)
+                img_filename = img_path.name
+
+                found_path = None
+
+                # 优先在 MinerU output 中递归搜索（因为包含任务ID子目录）
+                if mineru_output.exists():
+                    for img_file in mineru_output.rglob(img_filename):
+                        if img_file.is_file():
+                            found_path = img_file
+                            logger.debug(f"在 MinerU output 中找到图片: {img_file}")
+                            break
+
+                # 如果没找到，尝试在其他目录中查找
+                if not found_path:
+                    for search_dir in search_dirs:
+                        candidate = search_dir / img_filename
+                        if candidate.exists():
+                            found_path = candidate
+                            logger.debug(f"找到图片: {candidate}")
+                            break
+
+                if not found_path:
+                    logger.warning(f"图片文件不存在: {img_filename} (搜索了 {len(search_dirs)} 个目录)")
+                    continue
+
+                # 读取图片字节
+                with open(found_path, "rb") as f:
+                    img_bytes = f.read()
+
+                ext = found_path.suffix.lstrip(".") or "jpg"
+
+                images.append({
+                    "page": 0,  # 页码从 Markdown 不易提取，后续可优化
+                    "index": idx,
+                    "bytes": img_bytes,
+                    "ext": ext,
+                    "description": "",  # Markdown 模式下无 VLM 描述，需后续补充
+                    "caption": caption,  # 图注
+                    "vlm_model": None,
+                    "vlm_confidence": 0.0,
+                    "_source_path": str(found_path),
+                })
+
+                logger.debug(f"成功提取图片 [{idx}]: {found_path.name}, 大小={len(img_bytes)} bytes")
+
+            except Exception as e:
+                logger.warning(f"提取图片失败 [{idx}]: {e}")
+
+        logger.info(f"成功提取 {len(images)} 张图片")
+        return images
 
     def _extract_images_from_content_list(self, content_list: list, pdf_path: Path) -> list:
         """

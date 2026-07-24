@@ -138,9 +138,11 @@ async def pull_along_images(
     parent_score_ratio: float = 0.8,
 ) -> List[ChunkResult]:
     """
-    图片伴随召回：对 text/table Chunk 中引用的图号，将对应 image_description Chunk 拉入结果集
+    图片伴随召回：确保生成层能看到配图，不依赖 image_description Chunk 是否被向量召回
 
-    用途：确保生成层能看到 VLM 描述，不依赖 image_description Chunk 是否被向量召回
+    两种触发路径：
+    1. 显式图号引用：text/table Chunk content 中含 "图N"，正则提取后查 Image 表
+    2. 语义关联（入库预计算）：读取 Chunk.related_chunk_ids，直接拉取关联的 image_description Chunk
 
     Args:
         chunks: 召回的 Chunk 列表
@@ -158,7 +160,7 @@ async def pull_along_images(
         # 已在结果集中的 chunk_id，用于去重
         existing_ids = {c.chunk_id for c in chunks}
 
-        # 提取图号引用
+        # ── 路径1：显式图号引用 ────────────────────────────────────────
         refs: Dict[Tuple[int, str], float] = {}  # (doc_id, fig_no) → 父 chunk 最高分
         for chunk in chunks:
             if chunk.content_type not in ("text", "table"):
@@ -168,62 +170,76 @@ async def pull_along_images(
                 key = (chunk.document_id, fig_no)
                 refs[key] = max(refs.get(key, 0.0), chunk.score)
 
-        if not refs:
-            return chunks
+        if refs:
+            doc_ids = list({k[0] for k in refs})
+            fig_nos = list({k[1] for k in refs})
+            images = (
+                db.query(Image)
+                .filter(Image.document_id.in_(doc_ids), Image.figure_number.in_(fig_nos))
+                .all()
+            )
+            img_chunk_to_fig = {
+                img.chunk_id: (img.document_id, img.figure_number)
+                for img in images if img.chunk_id and img.chunk_id not in existing_ids
+            }
+            if img_chunk_to_fig:
+                db_chunks = db.query(DBChunk).filter(DBChunk.id.in_(list(img_chunk_to_fig.keys()))).all()
+                for dbc in db_chunks:
+                    key = img_chunk_to_fig.get(dbc.id)
+                    parent_score = refs.get(key, 0.5) if key else 0.5
+                    meta = dbc.meta_data or {}
+                    chunks.append(ChunkResult(
+                        chunk_id=dbc.id,
+                        document_id=dbc.document_id,
+                        content=dbc.content,
+                        content_type="image_description",
+                        score=round(parent_score * parent_score_ratio, 4),
+                        recall_source="pull_along",
+                        document_title=meta.get("document_title", ""),
+                        standard_no=meta.get("standard_no"),
+                        clause=dbc.clause,
+                        page_start=dbc.page_start,
+                        page_end=dbc.page_end,
+                    ))
+                    existing_ids.add(dbc.id)
 
-        # 一次查询：(document_id, figure_number) → image_description chunk_id
-        doc_ids = list({k[0] for k in refs})
-        fig_nos = list({k[1] for k in refs})
-        images = (
-            db.query(Image)
-            .filter(Image.document_id.in_(doc_ids), Image.figure_number.in_(fig_nos))
-            .all()
-        )
-
-        # 拉取 image_description Chunk 记录
-        img_chunk_ids = [
-            img.chunk_id for img in images
-            if img.chunk_id and img.chunk_id not in existing_ids
-        ]
-        if not img_chunk_ids:
-            return chunks
-
-        db_chunks = db.query(DBChunk).filter(DBChunk.id.in_(img_chunk_ids)).all()
-
-        # 构建图号 → 父分数映射
-        img_chunk_to_fig = {
-            img.chunk_id: (img.document_id, img.figure_number)
-            for img in images if img.chunk_id
-        }
-
-        # 追加拉取的 Chunk
-        added_count = 0
-        for dbc in db_chunks:
-            key = img_chunk_to_fig.get(dbc.id)
-            if not key:
+        # ── 路径2：related_chunk_ids 语义关联 ─────────────────────────
+        related_ids_map: Dict[int, float] = {}  # chunk_id → 父分数
+        for chunk in chunks:
+            if chunk.content_type not in ("text", "table"):
                 continue
-            parent_score = refs.get(key, 0.5)
+            if not chunk.related_chunk_ids:
+                continue
+            for rel_id in chunk.related_chunk_ids:
+                if rel_id not in existing_ids:
+                    related_ids_map[rel_id] = max(related_ids_map.get(rel_id, 0.0), chunk.score)
 
-            # 从 meta_data 提取文档信息
-            meta = dbc.meta_data or {}
-
-            chunks.append(ChunkResult(
-                chunk_id=dbc.id,
-                document_id=dbc.document_id,
-                content=dbc.content,
-                content_type="image_description",
-                score=round(parent_score * parent_score_ratio, 4),
-                recall_source="pull_along",  # 标记来源，便于调试
-                document_title=meta.get("document_title", ""),
-                standard_no=meta.get("standard_no"),
-                clause=dbc.clause,
-                page_start=dbc.page_start,
-                page_end=dbc.page_end,
-            ))
-            added_count += 1
-
-        if added_count > 0:
-            logger.info(f"[pull_along_images] Added {added_count} image_description chunks")
+        if related_ids_map:
+            db_chunks = (
+                db.query(DBChunk)
+                .filter(
+                    DBChunk.id.in_(list(related_ids_map.keys())),
+                    DBChunk.content_type == "image_description"
+                )
+                .all()
+            )
+            for dbc in db_chunks:
+                parent_score = related_ids_map.get(dbc.id, 0.5)
+                meta = dbc.meta_data or {}
+                chunks.append(ChunkResult(
+                    chunk_id=dbc.id,
+                    document_id=dbc.document_id,
+                    content=dbc.content,
+                    content_type="image_description",
+                    score=round(parent_score * parent_score_ratio, 4),
+                    recall_source="pull_along_semantic",
+                    document_title=meta.get("document_title", ""),
+                    standard_no=meta.get("standard_no"),
+                    clause=dbc.clause,
+                    page_start=dbc.page_start,
+                    page_end=dbc.page_end,
+                ))
+                existing_ids.add(dbc.id)
 
         return chunks
 

@@ -207,6 +207,16 @@ class SlowLane:
         # 信息聚合与去重
         aggregated_chunks = self._aggregate_chunks(all_chunks)
 
+        # 图片伴随召回 + 图片链接注入（与快车道一致，在重排之前）
+        if aggregated_chunks:
+            try:
+                from app.core.retrieval.image_link_injector import pull_along_images, inject_image_links
+                aggregated_chunks = await pull_along_images(aggregated_chunks, self.db)
+                aggregated_chunks = await inject_image_links(aggregated_chunks, self.db)
+                logger.info(f"[SlowLane] Image injection completed: {len(aggregated_chunks)} chunks")
+            except Exception as e:
+                logger.error(f"[SlowLane] Image injection error: {e}", exc_info=True)
+
         # 两阶段重排（与快车道一致）
         if aggregated_chunks:
             try:
@@ -236,6 +246,13 @@ class SlowLane:
                         page_end=r.page_end,
                         recall_source=r.recall_source,
                         document_title=r.document_title,
+                        content_type=r.content_type,
+                        image_id=r.image_id,
+                        image_url=r.image_url,
+                        image_page=r.image_page,
+                        image_figure_number=r.image_figure_number,
+                        image_caption=r.image_caption,
+                        referenced_images=[ImageRef(**img) for img in r.referenced_images] if r.referenced_images else [],
                     ))
                 logger.info(f"[SlowLane] Reranked: {len(aggregated_chunks)} → {len(final_chunks)}")
                 aggregated_chunks = final_chunks

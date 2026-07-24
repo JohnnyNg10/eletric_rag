@@ -70,13 +70,15 @@ class AnswerGenerator:
 1. **基于资料**：答案参考资料，要自己进行完善和补充
 2. **综合阐述**：不要简单罗列原文，整理格式后回答，不要直接把表格堆在答案，要理解后用专业语言进行综合、整理和解释，给出完整的专业回答
 3. **引用溯源**：引用关键数据、规范条文或重要结论时，在句末标注来源编号，如[1]、[2]
+4. **配图提示**：如果参考资料中标注了【包含图片】或【涉及图片】，在答案相应位置明确提示用户"详见引用来源[N]中的配图"或"流程图见参考资料[N]"
 
 回答格式要求：
 - 针对问题的多个方面分别阐述，逻辑清晰
 - 技术术语使用准确，对重要概念给出必要的解释
 - 涉及具体数值、分级、限值时，完整列出并说明其含义
 - 如参考资料涵盖多个相关方面，主动归纳总结
-- 如参考资料确实不包含所问内容，明确说明"""
+- 如参考资料确实不包含所问内容，明确说明
+- 当用户明确要求"展示图片"或"给我看图"时，直接回答"该流程图/示意图见引用来源[N]，请在引用来源中查看配图"""
 
     def build_prompt(
         self,
@@ -108,6 +110,18 @@ class AnswerGenerator:
 
             source_line = " ".join(source_parts)
             content = chunk.content if chunk.content else ""
+
+            # 如果 chunk 有配图，在参考资料中标注
+            has_image = False
+            if chunk.content_type == "image_description" and chunk.image_url:
+                has_image = True
+                content += f"\n\n【此参考资料包含图片，请在答案中明确提示用户查看引用来源[{i}]中的配图】"
+            elif chunk.referenced_images:
+                has_image = True
+                fig_numbers = [img.get('figure_number') or '图片' for img in chunk.referenced_images if isinstance(img, dict)]
+                if fig_numbers:
+                    content += f"\n\n【此参考资料涉及{', '.join(fig_numbers)}，请在答案中提示用户查看引用来源[{i}]中的相关配图】"
+
             references.append(f"{source_line}\n{content}")
 
         references_text = "\n\n".join(references)
