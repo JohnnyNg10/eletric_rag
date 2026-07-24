@@ -101,12 +101,12 @@ vim .env  # 或使用 nano .env
 
 ```bash
 # ==================== LLM API ====================
-ARK_API_KEY=your_doubao_api_key_here          # ⚠️ 必填：豆包 API Key
-LLM_MODEL=your_llm_model_endpoint             # ⚠️ 必填：如 doubao-pro-32k
+ARK_API_KEY=your_api_key_here                 # ⚠️ 必填：豆包 API Key
+LLM_MODEL=your_model_endpoint_here            # ⚠️ 必填：端点 ID，如 ep-20260717095008-xxxxx
 
 # ==================== VLM API ====================
-DOUBAO_API_KEY=your_doubao_api_key_here       # ⚠️ 如果启用扫描版 PDF，需填写
-DOUBAO_MODEL=your_vlm_model_endpoint          # ⚠️ 如 doubao-vision-pro
+DOUBAO_API_KEY=your_api_key_here              # ⚠️ 启用扫描版 PDF 需填写（与 ARK_API_KEY 相同）
+DOUBAO_MODEL=your_vlm_model_endpoint_here     # ⚠️ VLM 端点 ID，如 ep-20260717161647-xxxxx
 
 # ==================== Security ====================
 SECRET_KEY=your_random_32_chars_secret_key    # ⚠️ 必填：运行 openssl rand -hex 32 生成
