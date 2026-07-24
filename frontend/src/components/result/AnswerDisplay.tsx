@@ -3,7 +3,9 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { useState, useRef } from 'react';
 import type { Citation } from '../../types/query';
+import { CitationHoverCard } from './CitationHoverCard';
 
 interface AnswerDisplayProps {
   answer: string;
@@ -27,13 +29,36 @@ export default function AnswerDisplay({
   onCitationClick,
 }: AnswerDisplayProps) {
   const hasResult = Boolean(answer.trim()) || citations.length > 0 || isStreaming || Boolean(error);
+  const [hoveredCitation, setHoveredCitation] = useState<Citation | null>(null);
+  const [hoverAnchorRect, setHoverAnchorRect] = useState<DOMRect | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+
+  const handleCitationMouseEnter = (citation: Citation, e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoveredCitation(citation);
+      setHoverAnchorRect(rect);
+    }, 300);
+  };
+
+  const handleCitationMouseLeave = () => {
+    if (hoverTimerRef.current !== null) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
+  const closeHoverCard = () => {
+    setHoveredCitation(null);
+    setHoverAnchorRect(null);
+  };
 
   if (!hasResult) {
     return (
       <section className="answer-panel empty-state" aria-label="答案展示区域">
         <h2 className="panel-title">准备开始查询</h2>
         <p>
-          完成登录后，输入问题即可先看到预处理结果，再决定是否采纳系统建议的车道与补充选项。
+          完成登录后，输入问题即可先看到预处理结果，再决定是否采纳系统建议的检索方式与补充选项。
         </p>
       </section>
     );
@@ -93,6 +118,8 @@ export default function AnswerDisplay({
                 type="button"
                 className={`citation-card ${selectedCitation?.chunk_id === citation.chunk_id ? 'selected' : ''}`}
                 onClick={() => onCitationClick(citation)}
+                onMouseEnter={(e) => handleCitationMouseEnter(citation, e)}
+                onMouseLeave={handleCitationMouseLeave}
                 aria-label="查看引用详情"
               >
                 <div className="citation-index">[{citation.id}]</div>
@@ -170,6 +197,14 @@ export default function AnswerDisplay({
           </div>
         </div>
       ) : null}
+
+      {hoveredCitation && hoverAnchorRect && (
+        <CitationHoverCard
+          citation={hoveredCitation}
+          anchorRect={hoverAnchorRect}
+          onClose={closeHoverCard}
+        />
+      )}
     </section>
   );
 }

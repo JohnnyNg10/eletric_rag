@@ -322,3 +322,185 @@
 .citation-detail-image-info div {
   margin: 4px 0;
 }
+
+/* 相关问题推荐样式 */
+.related-queries-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.section-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin: 0 0 12px 0;
+}
+
+.related-queries-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.related-query-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.related-query-button:hover {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-primary);
+  transform: translateX(4px);
+}
+
+.related-query-button:active {
+  transform: translateX(2px);
+}
+
+.related-query-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  background: var(--color-primary);
+  color: white;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.related-query-text {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.related-query-arrow {
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.related-query-button:hover .related-query-arrow {
+  transform: translateX(4px);
+}
+
+/* 引用 hover 卡片样式 */
+.citation-hover-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: transparent;
+  z-index: 1999;
+}
+
+.citation-hover-card {
+  background: #FBF7EF;
+  border: 2px solid #E2D9C8;
+  border-radius: 10px;
+  padding: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.08);
+  animation: hoverCardFadeIn 0.2s ease-out;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+@keyframes hoverCardFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hover-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.hover-card-standard {
+  font-size: 14px;
+  font-weight: 600;
+  color: #C8853F;
+}
+
+.hover-card-clause {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: #F0E3D0;
+  color: #8A8A80;
+  border-radius: 4px;
+}
+
+.hover-card-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1F2421;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.hover-card-chapter {
+  font-size: 12px;
+  color: #8A8A80;
+  margin-bottom: 10px;
+}
+
+.hover-card-content {
+  font-size: 13px;
+  color: #1F2421;
+  line-height: 1.6;
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #E2D9C8;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.hover-card-images-hint {
+  font-size: 11px;
+  color: #8A8A80;
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+.hover-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid #E2D9C8;
+}
+
+.hover-card-hint {
+  font-size: 11px;
+  color: #8A8A80;
+}

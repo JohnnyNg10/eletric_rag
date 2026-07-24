@@ -27,13 +27,13 @@ export const LANE_META: Record<
 > = {
   fast: {
     icon: '⚡',
-    label: '快车道',
+    label: '标准检索',
     estimate: '预计 2-3 秒',
     className: 'is-fast',
   },
   slow: {
     icon: '🔄',
-    label: '慢车道',
+    label: '智能检索',
     estimate: '预计 5-8 秒，多步推理',
     className: 'is-slow',
   },

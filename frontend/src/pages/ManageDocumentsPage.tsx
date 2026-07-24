@@ -76,33 +76,60 @@ export function ManageDocumentsPage() {
               查看和管理已导入的文档，可以删除不需要的知识库内容。
             </p>
 
-            {/* 删除确认面板 */}
+            {/* 删除确认模态框 */}
             {selectedDocId !== null && deleteState.phase === 'idle' && (
-              <div
-                className="info-card compact"
-                style={{
-                  marginBottom: 16,
-                  background: 'rgba(255, 204, 0, 0.08)',
-                  border: '1px solid rgba(255, 204, 0, 0.25)',
-                }}
-              >
-                <p style={{ margin: 0, fontWeight: 500 }}>确认删除文档 ID {selectedDocId}？</p>
-                <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                  此操作将删除文档及所有关联数据（分块、向量、图片等），不可恢复。
-                </p>
-                <div className="panel-actions end" style={{ marginTop: 12 }}>
-                  <button className="ghost-button" onClick={handleCancelDelete}>
-                    取消
-                  </button>
-                  <button
-                    className="primary-button"
-                    onClick={handleConfirmDelete}
-                    style={{ background: 'var(--color-error)' }}
+              <>
+                <div
+                  style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.4)',
+                    zIndex: 1000,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  onClick={handleCancelDelete}
+                >
+                  <div
+                    className="query-input-card"
+                    style={{
+                      maxWidth: 480,
+                      margin: 20,
+                      padding: 24,
+                      background: '#FBF7EF',
+                      border: '2px solid rgba(200, 133, 63, 0.3)',
+                      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    确认删除
-                  </button>
+                    <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 600, color: '#1F2421' }}>
+                      确认删除文档
+                    </h3>
+                    <p style={{ margin: '0 0 8px', fontSize: 15, color: '#1F2421' }}>
+                      文档 ID: <strong>{selectedDocId}</strong>
+                    </p>
+                    <p style={{ margin: 0, fontSize: 14, color: '#8A8A80', lineHeight: 1.6 }}>
+                      此操作将永久删除该文档及所有关联数据（分块、向量、图片等），删除后无法恢复。
+                    </p>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 20, justifyContent: 'flex-end' }}>
+                      <button className="ghost-button" onClick={handleCancelDelete}>
+                        取消
+                      </button>
+                      <button
+                        className="primary-button"
+                        onClick={handleConfirmDelete}
+                        style={{ background: '#dc2626', borderColor: '#dc2626' }}
+                      >
+                        确认删除
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </>
             )}
 
             {/* 删除中状态 */}

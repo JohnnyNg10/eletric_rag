@@ -23,7 +23,7 @@ from app.storage.vector_store import vector_store
 from app.storage.search_engine import search_engine
 from app.storage.object_store import object_store
 from app.db.session import get_db
-from app.db.models import Document, Chunk as DBChunk, Image as DBImage
+from app.db.models import Document, Chunk as DBChunk, Image as DBImage, Table as DBTable
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +171,15 @@ class DocumentIngestionPipeline:
                 document.image_count = images_count
                 db.commit()
 
+            # Step 6.7: 处理表格（HTML表格提取）
+            tables_count = 0
+            table_chunks = []  # 表格专用chunks
+            logger.info("Step 6.7: Extracting tables from markdown...")
+            tables_count, table_chunks = self._process_tables(parsed['content'], document_id, metadata, db)
+            document.table_count = tables_count
+            db.commit()
+            logger.info(f"Extracted {tables_count} tables")
+
             # Step 7: 文档分块
             logger.info("Step 7: Chunking document...")
             chunks = document_chunker.chunk_document(
@@ -180,6 +189,9 @@ class DocumentIngestionPipeline:
                 doc_type=metadata.get('doc_type', 'standard')
             )
             logger.info(f"Generated {len(chunks)} chunks")
+
+            # 合并表格chunks到主chunk列表
+            chunks.extend(table_chunks)
 
             # Step 8: 向量化 + 入库（含图文关联计算）
             logger.info("Step 8: Vectorizing and indexing chunks...")
@@ -404,6 +416,145 @@ class DocumentIngestionPipeline:
 
         db.commit()
         return count, image_chunk_data
+
+    def _process_tables(
+        self,
+        markdown_content: str,
+        document_id: int,
+        metadata: Dict,
+        db
+    ) -> tuple:
+        """
+        从 markdown 中提取 HTML 表格，使用 pandas 解析为结构化文本并入库
+
+        Returns:
+            (tables_count, table_chunks)
+            table_chunks: List[Chunk]，content_type='table'，待后续向量化
+        """
+        import re
+        import pandas as pd
+        from io import StringIO
+
+        def html_table_to_markdown(html: str, title: str = None) -> str:
+            """将 HTML 表格用 pandas 解析并转为 Markdown 文本"""
+            try:
+                # pandas.read_html 自动处理 colspan/rowspan，指定 lxml 解析器
+                dfs = pd.read_html(StringIO(html), flavor='lxml', header=None)
+                if not dfs:
+                    return ''
+
+                df = dfs[0]
+
+                # 清理 NaN，转为字符串
+                df = df.fillna('')
+                df = df.astype(str)
+
+                # 转为标准 GFM Markdown 表格（remarkGfm 可直接渲染）
+                lines = []
+                if title:
+                    lines.append(title)
+                    lines.append('')
+
+                for idx, row in df.iterrows():
+                    cells = [str(c).strip().replace('\n', ' ').replace('|', '\\|') for c in row]
+                    line = '| ' + ' | '.join(cells) + ' |'
+                    lines.append(line)
+                    # 第一行后插入 GFM 分隔行
+                    if idx == 0:
+                        sep = '| ' + ' | '.join(['---'] * len(cells)) + ' |'
+                        lines.append(sep)
+
+                return '\n'.join(lines)
+            except Exception as e:
+                logger.warning(f"pandas 解析表格失败: {e}")
+                return ''
+
+        # 匹配 markdown 中的完整 <table>...</table>
+        table_pattern = re.compile(r'<table>.*?</table>', re.DOTALL | re.IGNORECASE)
+
+        table_chunks = []
+        tables_count = 0
+
+        for idx, match in enumerate(table_pattern.finditer(markdown_content)):
+            try:
+                html = match.group(0)
+                start_pos = match.start()
+
+                # 向前查找表格标题（<table> 前最多300字符内）
+                preceding_text = markdown_content[max(0, start_pos - 300):start_pos]
+                preceding_lines = preceding_text.split('\n')
+                title = None
+                table_number = None
+
+                # 从后往前找最近的"表X"开头的行
+                for line in reversed(preceding_lines[-5:]):
+                    line = line.strip()
+                    # 匹配"表A2 Ex i装置检查一览表"
+                    m = re.search(r'表\s*([A-Z0-9][A-Z0-9\.\-]*)\s+(.*)', line)
+                    if m:
+                        table_number = m.group(1)
+                        title = line
+                        break
+                    # 只有"表A2"
+                    m2 = re.match(r'表\s*([A-Z0-9][A-Z0-9\.\-]*)', line)
+                    if m2:
+                        table_number = m2.group(1)
+                        title = line
+                        break
+
+                # 估算页码
+                total_chars = len(markdown_content)
+                total_pages = metadata.get('page_count') or 1
+                estimated_page = max(1, int(start_pos / total_chars * total_pages))
+
+                # 用 pandas 解析表格
+                text_content = html_table_to_markdown(html, title)
+                if not text_content or len(text_content) < 20:
+                    continue
+
+                # 创建 Table DB 记录
+                db_table = DBTable(
+                    document_id=document_id,
+                    table_number=table_number,
+                    title=title,
+                    page_number=estimated_page,
+                    table_index=idx,
+                    markdown_content=text_content,
+                    minio_path=f"tables/{metadata.get('standard_no', 'unknown')}/table_{idx}.txt",
+                )
+                db.add(db_table)
+                db.flush()  # 获取 db_table.id
+
+                # 创建 content_type='table' 的 Chunk（待向量化）
+                table_chunk = Chunk(
+                    content=text_content,
+                    chunk_type='parent',
+                    document_id=document_id,
+                    content_type='table',
+                    page_start=estimated_page,
+                    page_end=estimated_page,
+                    position_in_doc=idx,
+                    meta_data={
+                        'table_number': table_number,
+                        'table_title': title,
+                        'table_id': db_table.id,
+                    }
+                )
+                # 关联 Table.chunk_id
+                db_table.chunk_id = None  # 稍后更新
+
+                table_chunks.append(table_chunk)
+                tables_count += 1
+                logger.debug(f"提取表格: {title or f'table_{idx}'}, 页码{estimated_page}")
+
+            except Exception as e:
+                logger.error(f"表格处理失败 (index={idx}): {e}", exc_info=True)
+
+        if tables_count > 0:
+            db.commit()
+            logger.info(f"表格提取完成: {tables_count} 个表格")
+
+        return tables_count, table_chunks
 
     def _process_chunks(
         self,

@@ -233,7 +233,7 @@ export function useConversation({ accessToken }: { accessToken: string }) {
       abortControllerRef.current = controller;
 
       const slowQueryTimer = window.setTimeout(() => {
-        setTimeoutNotice('查询耗时较长，建议尝试切换车道后重新提交。');
+        setTimeoutNotice('查询耗时较长，建议尝试切换检索方式后重新提交。');
       }, 150000);
 
       try {

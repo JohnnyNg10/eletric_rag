@@ -44,7 +44,7 @@ export default function RouteRecommendation({
         </div>
         <button type="button" className="secondary-button" onClick={onToggle} aria-pressed={userLane !== null}>
           {userLane === null
-            ? `切换为${lane === 'fast' ? '慢车道' : '快车道'}`
+            ? `切换为${lane === 'fast' ? '智能检索' : '标准检索'}`
             : '恢复系统建议'}
         </button>
       </div>

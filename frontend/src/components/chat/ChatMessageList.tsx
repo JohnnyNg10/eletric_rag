@@ -6,9 +6,10 @@ import './ChatMessageList.css';
 interface ChatMessageListProps {
   messages: Message[];
   isLoadingHistory?: boolean;
+  onRelatedQueryClick?: (query: string) => void;
 }
 
-export function ChatMessageList({ messages, isLoadingHistory }: ChatMessageListProps) {
+export function ChatMessageList({ messages, isLoadingHistory, onRelatedQueryClick }: ChatMessageListProps) {
   const listEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -60,7 +61,11 @@ export function ChatMessageList({ messages, isLoadingHistory }: ChatMessageListP
     <div className="chat-message-list" ref={containerRef}>
       <div className="messages-container">
         {messages.map((message) => (
-          <ChatMessage key={message.id} message={message} />
+          <ChatMessage
+            key={message.id}
+            message={message}
+            onRelatedQueryClick={onRelatedQueryClick}
+          />
         ))}
         <div ref={listEndRef} />
       </div>

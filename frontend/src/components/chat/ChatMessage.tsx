@@ -1,14 +1,18 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Message } from '../../hooks/useConversation';
 import type { Citation } from '../../types/query';
+import { CitationHoverCard } from '../result/CitationHoverCard';
+import { RelatedQueriesPanel } from '../result/RelatedQueriesPanel';
 import './ChatMessage.css';
 
 interface ChatMessageProps {
   message: Message;
+  onRelatedQueryClick?: (query: string) => void;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onRelatedQueryClick }: ChatMessageProps) {
   if (message.role === 'user') {
     return <UserMessage content={message.content} />;
   }
@@ -19,6 +23,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
       citations={message.citations}
       metadata={message.metadata}
       status={message.status}
+      onRelatedQueryClick={onRelatedQueryClick}
     />
   );
 }
@@ -36,12 +41,37 @@ interface AssistantMessageProps {
   citations?: Citation[];
   metadata?: Message['metadata'];
   status: Message['status'];
+  onRelatedQueryClick?: (query: string) => void;
 }
 
-function AssistantMessage({ content, citations, metadata, status }: AssistantMessageProps) {
+function AssistantMessage({ content, citations, metadata, status, onRelatedQueryClick }: AssistantMessageProps) {
   const [citationsExpanded, setCitationsExpanded] = useState(false);
+  const [hoveredCitation, setHoveredCitation] = useState<Citation | null>(null);
+  const [hoverAnchorRect, setHoverAnchorRect] = useState<DOMRect | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
 
   const hasCitations = citations && citations.length > 0;
+  const hasRelatedQueries = metadata?.expanded_queries && metadata.expanded_queries.length > 0;
+
+  const handleCitationMouseEnter = (citation: Citation, e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoveredCitation(citation);
+      setHoverAnchorRect(rect);
+    }, 300);
+  };
+
+  const handleCitationMouseLeave = () => {
+    if (hoverTimerRef.current !== null) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
+  const closeHoverCard = () => {
+    setHoveredCitation(null);
+    setHoverAnchorRect(null);
+  };
 
   return (
     <div className="chat-message assistant-message">
@@ -55,8 +85,17 @@ function AssistantMessage({ content, citations, metadata, status }: AssistantMes
         )}
 
         {content && (
-          <div className="message-content">
-            <ReactMarkdown>{content}</ReactMarkdown>
+          <div className="message-content answer-markdown">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                table: ({ children }) => (
+                  <div className="markdown-table-scroll">
+                    <table>{children}</table>
+                  </div>
+                ),
+              }}
+            >{content}</ReactMarkdown>
           </div>
         )}
 
@@ -80,7 +119,13 @@ function AssistantMessage({ content, citations, metadata, status }: AssistantMes
             {citationsExpanded && (
               <div className="citations-list">
                 {citations.map((citation, index) => (
-                  <CitationCard key={index} citation={citation} />
+                  <div
+                    key={index}
+                    onMouseEnter={(e) => handleCitationMouseEnter(citation, e)}
+                    onMouseLeave={handleCitationMouseLeave}
+                  >
+                    <CitationCard citation={citation} />
+                  </div>
                 ))}
               </div>
             )}
@@ -91,7 +136,7 @@ function AssistantMessage({ content, citations, metadata, status }: AssistantMes
           <div className="message-footer">
             {metadata.lane && (
               <span className={`lane-badge ${metadata.lane}`}>
-                {metadata.lane === 'fast' ? '快速车道' : '慢速车道'}
+                {metadata.lane === 'fast' ? '标准检索' : '智能检索'}
               </span>
             )}
             {metadata.retrieval_time !== null && metadata.retrieval_time !== undefined && (
@@ -101,6 +146,21 @@ function AssistantMessage({ content, citations, metadata, status }: AssistantMes
               <span className="time-info">生成 {metadata.generation_time}ms</span>
             )}
           </div>
+        )}
+
+        {hasRelatedQueries && status === 'completed' && onRelatedQueryClick && (
+          <RelatedQueriesPanel
+            queries={metadata.expanded_queries!}
+            onQueryClick={onRelatedQueryClick}
+          />
+        )}
+
+        {hoveredCitation && hoverAnchorRect && (
+          <CitationHoverCard
+            citation={hoveredCitation}
+            anchorRect={hoverAnchorRect}
+            onClose={closeHoverCard}
+          />
         )}
       </div>
     </div>

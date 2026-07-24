@@ -68,9 +68,13 @@ class AnswerGenerator:
 
 核心原则：
 1. **基于资料**：答案参考资料，要自己进行完善和补充
-2. **综合阐述**：不要简单罗列原文，整理格式后回答，不要直接把表格堆在答案，要理解后用专业语言进行综合、整理和解释，给出完整的专业回答
+2. **综合阐述**：不要简单罗列原文，整理格式后回答，给出完整的专业回答
 3. **引用溯源**：引用关键数据、规范条文或重要结论时，在句末标注来源编号，如[1]、[2]
 4. **配图提示**：如果参考资料中标注了【包含图片】或【涉及图片】，在答案相应位置明确提示用户"详见引用来源[N]中的配图"或"流程图见参考资料[N]"
+
+表格处理规则（优先级最高）：
+- 当用户明确要求"展示...表"、"给我看...表"、"列出...表"、"一览表"、"参数表"等，必须直接以结构化表格（Markdown 表格）原样输出表格内容，不得转述为散文
+- 其他情况下，可以理解表格内容后用专业语言综合表述，但数值/分级/限值必须完整列出
 
 回答格式要求：
 - 针对问题的多个方面分别阐述，逻辑清晰
@@ -111,13 +115,13 @@ class AnswerGenerator:
             source_line = " ".join(source_parts)
             content = chunk.content if chunk.content else ""
 
+            # 表格 chunk：加标注提示 LLM 直接输出
+            if chunk.content_type == "table":
+                content = f"【结构化表格内容，用户要求展示时直接以 Markdown 表格格式输出，不得转述】\n{content}"
             # 如果 chunk 有配图，在参考资料中标注
-            has_image = False
-            if chunk.content_type == "image_description" and chunk.image_url:
-                has_image = True
+            elif chunk.content_type == "image_description" and chunk.image_url:
                 content += f"\n\n【此参考资料包含图片，请在答案中明确提示用户查看引用来源[{i}]中的配图】"
             elif chunk.referenced_images:
-                has_image = True
                 fig_numbers = [img.get('figure_number') or '图片' for img in chunk.referenced_images if isinstance(img, dict)]
                 if fig_numbers:
                     content += f"\n\n【此参考资料涉及{', '.join(fig_numbers)}，请在答案中提示用户查看引用来源[{i}]中的相关配图】"
@@ -336,6 +340,92 @@ class AnswerGenerator:
         # 估算
         tokens = int(chinese_chars * 1.5 + non_chinese_chars / 4)
         return tokens
+
+    async def generate_related_queries(
+        self,
+        query: str,
+        answer: str,
+        max_queries: int = 5
+    ) -> List[str]:
+        """
+        基于当前问答生成相关问题推荐
+
+        Args:
+            query: 用户原始问题
+            answer: 生成的答案
+            max_queries: 最大推荐问题数量
+
+        Returns:
+            List[str]: 相关问题列表（3-5个）
+        """
+        # 截断答案以控制prompt长度
+        answer_snippet = answer[:400] if len(answer) > 400 else answer
+
+        prompt = f"""基于以下问答，生成3-5个相关的后续问题，帮助用户深入了解该领域。
+
+用户问题：{query}
+
+已回答内容（部分）：
+{answer_snippet}
+
+要求：
+1. 生成的问题应该是用户可能感兴趣的相关主题
+2. 可以是深入探讨、扩展应用、对比标准、实践案例等方向
+3. 每个问题应该具体、可独立回答
+4. 只输出JSON数组格式，不要其他文字
+
+示例输出格式：
+["相关问题1", "相关问题2", "相关问题3"]
+
+输出："""
+
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            response = self.llm_client.chat(
+                messages=messages,
+                temperature=0.7,  # 稍高温度以增加多样性
+                max_tokens=300
+            )
+
+            # 提取JSON数组
+            related_queries = self._extract_json_array(response)
+            if related_queries and len(related_queries) >= 3:
+                logger.info(f"[AnswerGenerator] Generated {len(related_queries)} related queries")
+                return related_queries[:max_queries]
+
+            logger.warning(f"[AnswerGenerator] Related queries generation returned invalid result")
+            return []
+
+        except Exception as e:
+            logger.error(f"[AnswerGenerator] Related queries generation error: {e}")
+            return []
+
+    def _extract_json_array(self, text: str) -> List[str]:
+        """从LLM响应中提取JSON数组"""
+        import json
+        import re
+
+        text = text.strip()
+
+        # 尝试直接解析
+        try:
+            result = json.loads(text)
+            if isinstance(result, list) and all(isinstance(s, str) for s in result):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+        # 提取 [ ... ]
+        match = re.search(r'\[.*?\]', text, re.DOTALL)
+        if match:
+            try:
+                result = json.loads(match.group(0))
+                if isinstance(result, list) and all(isinstance(s, str) for s in result):
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+        return []
 
 
 # 全局单例

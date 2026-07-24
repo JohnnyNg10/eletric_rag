@@ -131,7 +131,7 @@ export function HistoryPage() {
 
                   <div className="detail-grid">
                     <div className="info-card compact">
-                      <div className="section-title">车道</div>
+                      <div className="section-title">检索方式</div>
                       <div>{LANE_META[selectedItem.lane].label}</div>
                     </div>
                     <div className="info-card compact">

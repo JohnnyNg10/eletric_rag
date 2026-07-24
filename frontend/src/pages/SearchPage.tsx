@@ -29,6 +29,12 @@ export function SearchPage() {
     setDraftQuery('');
   };
 
+  const handleRelatedQueryClick = async (query: string) => {
+    setDraftQuery(query);
+    await conversation.sendQuery(query);
+    setDraftQuery('');
+  };
+
   const handleClearCache = async () => {
     if (!auth.accessToken) {
       throw new Error('未登录');
@@ -66,6 +72,7 @@ export function SearchPage() {
         <ChatMessageList
           messages={conversation.messages}
           isLoadingHistory={conversation.isLoadingHistory}
+          onRelatedQueryClick={handleRelatedQueryClick}
         />
 
         <div className="chat-input-area">

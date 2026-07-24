@@ -305,6 +305,7 @@ class SlowLane:
    - 用户提出技术问题，需要查找相关标准条款
    - 需要找到特定概念、要求、指标的具体规定
    - 比较不同标准对同一主题的规定
+   - 【重要】查询表格内容（见下方"表格检索指南"）
 
 2. retrieve_clause - 精确条款定位
    参数：{"standard_id": "标准号", "clause_number": "条款号"}
@@ -319,6 +320,14 @@ class SlowLane:
    适用场景：
    - 用户问"有哪些标准涉及XX"
    - 需要先确定相关标准范围，再用 retrieve_standard 检索内容
+
+【表格检索指南】
+当用户询问表格内容时（如"XX表""一览表""检查表""参数表""载流量表"），使用 retrieve_standard 工具：
+- query 格式：表格标题全称 + 表号（如有） + 关键内容
+- 示例1：用户问"Ex i装置检查一览表" → query: "Ex i 装置检查一览表 表A2"
+- 示例2：用户问"电缆载流量表" → query: "电缆载流量表 导体截面积"
+- 示例3：用户问"表5规定了什么" → query: "表5 表格内容 检查项目"
+- ⚠️ 表格可能被分成多个chunk，第一次检索后若信息不完整，应继续检索补充
 
 工具选择原则：
 - 优先使用 retrieve_standard 进行语义搜索（最有效）
@@ -360,7 +369,13 @@ class SlowLane:
   应选择：{{"action": "continue", "tool": "retrieve_clause", "params": {{"standard_id": "GB/T 33593-2017", "clause_number": "5.3"}}}}
 
 - 如果问题是"有哪些标准涉及光伏并网？"
-  应选择：{{"action": "continue", "tool": "list_related_standards", "params": {{"keyword": "光伏并网"}}}}"""
+  应选择：{{"action": "continue", "tool": "list_related_standards", "params": {{"keyword": "光伏并网"}}}}
+
+- 如果问题是"Ex i装置检查一览表有哪些项目？"
+  应选择：{{"action": "continue", "tool": "retrieve_standard", "params": {{"query": "Ex i 装置检查一览表 表A2 检查项目"}}}}
+
+- 如果问题是"GB 50217的电缆载流量表"
+  应选择：{{"action": "continue", "tool": "retrieve_standard", "params": {{"query": "GB 50217 电缆载流量表 导体截面", "standard_ids": ["GB 50217"]}}}}"""
 
         messages = [
             {"role": "system", "content": system_prompt},

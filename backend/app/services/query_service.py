@@ -367,6 +367,9 @@ class QueryService:
 
             logger.info(f"[User {user_id}] Generating answer with {len(chunks_for_generation)} chunks")
 
+            # 初始化生成相关变量
+            related_queries: list = []
+
             # 语义缓存检查（仅当 cache_strategy=semantic 且启用时）
             from app.config import settings as cfg
             semantic_cache_hit = False
@@ -390,6 +393,7 @@ class QueryService:
                     logger.info(f"[User {user_id}] Semantic cache hit (similarity={cached_semantic.similarity_score:.3f})")
                     answer = cached_semantic.answer
                     citations = cached_semantic.citations
+                    related_queries = getattr(cached_semantic, 'related_queries', []) or []
                     # 为缓存的 citations 补充图片信息
                     for citation in citations:
                         if isinstance(citation, dict) and 'chunk_id' in citation:
@@ -425,13 +429,13 @@ class QueryService:
                     # 为缓存的 citations 补充图片信息
                     for citation in citations:
                         if isinstance(citation, dict) and 'chunk_id' in citation:
-                            # 找到对应的 chunk 获取图片信息
                             for chunk in chunks_for_generation:
                                 if chunk.chunk_id == citation['chunk_id']:
                                     citation['images'] = self._extract_images_from_rerank_result(chunk)
                                     break
                     generation_time = cached_gen.get("generation_time_ms", 0)
                     cache_hit = True
+                    related_queries = cached_gen.get("related_queries", [])
 
                     # 统计图片召回情况
                     total_images = sum(len(c.get('images', [])) for c in citations)
@@ -472,6 +476,13 @@ class QueryService:
                     import json
                     logger.info(f"[Debug] Full citations data: {json.dumps(citations, ensure_ascii=False, indent=2)}")
 
+                    # 生成相关问题推荐（基于答案内容）
+                    related_queries = await self.generator.generate_related_queries(
+                        query=preprocessing_output.optimized_query,
+                        answer=answer
+                    )
+                    logger.info(f"[User {user_id}] Generated {len(related_queries)} related queries")
+
                     # 存储到传统 L4 缓存
                     cache.set_generation(
                         preprocessing_output.optimized_query,
@@ -480,6 +491,7 @@ class QueryService:
                             "answer": answer,
                             "citations": citations,
                             "generation_time_ms": generation_time,
+                            "related_queries": related_queries,  # 缓存相关问题
                         },
                         conversation_id
                     )
@@ -529,6 +541,7 @@ class QueryService:
             answer = f"抱歉，生成答案时出现错误。"
             generation_time = 0
             citations = []
+            related_queries = []
             cache_hit = False
 
         # 当前返回模拟结果
@@ -582,7 +595,8 @@ class QueryService:
             'generation_time': generation_time,
             'total_time': elapsed_ms,
             'query_log_id': query_log_id,
-            **lane_info  # 合并车道特定信息
+            **lane_info,  # 合并车道特定信息（含同义改写 expanded_queries）
+            'expanded_queries': related_queries or [],  # 覆盖为真正的相关问题推荐
         }
 
         # 如果是澄清后的查询，附加澄清上下文
