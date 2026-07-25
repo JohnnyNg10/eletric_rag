@@ -109,7 +109,9 @@ async def execute_query(
                         page_number=img.get('page_number') or 0
                     )
                     for img in c.get('images', [])
-                ]
+                ],
+                page_number=c.get('page_number'),
+                pdf_url=c.get('pdf_url'),
             )
             for i, c in enumerate(result.get('citations') or [])
         ]

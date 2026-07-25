@@ -34,6 +34,7 @@ function joinUrl(base: string, path: string) {
 export async function importDocument(
   file: File,
   processMode: ProcessMode,
+  customStandardNo?: string,
 ): Promise<DocumentImportResponse> {
   const baseUrl = getStoredApiBaseUrl();
   const token = getStoredAuth()?.accessToken;
@@ -41,6 +42,9 @@ export async function importDocument(
   const formData = new FormData();
   formData.append('file', file);
   formData.append('process_mode', processMode);
+  if (customStandardNo) {
+    formData.append('custom_standard_no', customStandardNo);
+  }
 
   const headers: HeadersInit = { Accept: 'application/json' };
   if (token) {

@@ -6,6 +6,7 @@ import 'katex/dist/katex.min.css';
 import { useState, useRef } from 'react';
 import type { Citation } from '../../types/query';
 import { CitationHoverCard } from './CitationHoverCard';
+import { preprocessAnswer } from '../../utils/query';
 
 interface AnswerDisplayProps {
   answer: string;
@@ -33,7 +34,7 @@ export default function AnswerDisplay({
   const [hoverAnchorRect, setHoverAnchorRect] = useState<DOMRect | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
 
-  const handleCitationMouseEnter = (citation: Citation, e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleCitationMouseEnter = (citation: Citation, e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     hoverTimerRef.current = window.setTimeout(() => {
       setHoveredCitation(citation);
@@ -51,6 +52,20 @@ export default function AnswerDisplay({
   const closeHoverCard = () => {
     setHoveredCitation(null);
     setHoverAnchorRect(null);
+  };
+
+  const handleCitationLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    e.preventDefault();
+    const match = href.match(/#citation-(\d+)/);
+    if (match) {
+      const citationId = match[1];
+      const element = document.getElementById(`citation-card-${citationId}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        element.classList.add('citation-highlight');
+        setTimeout(() => element.classList.remove('citation-highlight'), 2000);
+      }
+    }
   };
 
   if (!hasResult) {
@@ -96,9 +111,23 @@ export default function AnswerDisplay({
                       <table>{children}</table>
                     </div>
                   ),
+                  a: ({ href, children }) => {
+                    if (href?.startsWith('#citation-')) {
+                      return (
+                        <a
+                          href={href}
+                          className="citation-inline-link"
+                          onClick={(e) => handleCitationLinkClick(e, href)}
+                        >
+                          {children}
+                        </a>
+                      );
+                    }
+                    return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+                  },
                 }}
               >
-                {answer}
+                {preprocessAnswer(answer)}
               </ReactMarkdown>
             ) : (
               <p className="muted-text">正在等待模型返回内容...</p>
@@ -113,11 +142,14 @@ export default function AnswerDisplay({
           <div className="section-title">引用来源</div>
           <div className="citation-list">
             {citations.map((citation) => (
-              <button
+              <div
                 key={`${citation.chunk_id}-${citation.id}`}
-                type="button"
+                id={`citation-card-${citation.id}`}
+                role="button"
+                tabIndex={0}
                 className={`citation-card ${selectedCitation?.chunk_id === citation.chunk_id ? 'selected' : ''}`}
                 onClick={() => onCitationClick(citation)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onCitationClick(citation); }}
                 onMouseEnter={(e) => handleCitationMouseEnter(citation, e)}
                 onMouseLeave={handleCitationMouseLeave}
                 aria-label="查看引用详情"
@@ -155,8 +187,23 @@ export default function AnswerDisplay({
                       ))}
                     </div>
                   )}
+
+                  {/* PDF 打开按钮 */}
+                  {citation.pdf_url && (
+                    <div className="citation-actions">
+                      <a
+                        href={`${citation.pdf_url}#page=${citation.page_number || 1}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="citation-pdf-link"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        📄 打开原文{citation.page_number ? ` (第${citation.page_number}页)` : ''}
+                      </a>
+                    </div>
+                  )}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </div>

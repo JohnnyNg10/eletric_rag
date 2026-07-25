@@ -79,6 +79,8 @@ class Citation(BaseModel):
     content_snippet: str = Field(default="", description="引用内容片段")
     document_title: Optional[str] = Field(default=None, description="文档标题")
     images: List[ImageInfo] = Field(default_factory=list, description="关联的图片列表")
+    page_number: Optional[int] = Field(default=None, description="引用所在页码")
+    pdf_url: Optional[str] = Field(default=None, description="PDF预签名URL")
 
 
 class OptimizationOption(BaseModel):

@@ -45,10 +45,15 @@ def _has_text_layer(pdf_path: str) -> bool:
 async def import_document(
     file: UploadFile = File(...),
     process_mode: str = Form("auto"),
+    custom_standard_no: str = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """导入 PDF 文档（支持文字版 / 扫描件 / 自动识别）"""
+    """导入 PDF 文档（支持文字版 / 扫描件 / 自动识别）
+
+    参数:
+    - custom_standard_no: 可选，用户自定义标准号（如 Q/XXX-2024），优先级高于自动识别
+    """
     # 校验文件类型
     filename = file.filename or "upload.pdf"
     if not filename.lower().endswith(".pdf"):
@@ -107,6 +112,7 @@ async def import_document(
             file_path=f"scanned_pdfs/pending/{safe_name}",
             is_scanned=True,
             process_status="processing",
+            standard_no=custom_standard_no.strip() if custom_standard_no else None,
         )
         db.add(doc)
         db.commit()
@@ -126,8 +132,8 @@ async def import_document(
     else:
         from app.tasks.document_tasks import ingest_text_pdf_task
 
-        # 文字版路径：ingestion_pipeline 内部创建 Document，只返回 task_id
-        task = ingest_text_pdf_task.delay(tmp_path)
+        # 文字版路径：ingestion_pipeline 内部创建 Document，传递 custom_standard_no
+        task = ingest_text_pdf_task.delay(tmp_path, custom_standard_no=custom_standard_no.strip() if custom_standard_no else None)
 
         return DocumentImportResponse(
             task_id=task.id,

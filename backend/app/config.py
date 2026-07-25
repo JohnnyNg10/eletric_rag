@@ -62,12 +62,18 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = "electric-rag"
     MINIO_SECURE: bool = False
 
-    # LLM API (Volcengine Ark)
+    # LLM API (Volcengine Ark — kept for VLM/embedding)
     ARK_API_KEY: str = "your_api_key"
     LLM_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
-    LLM_MODEL: str = "ep-20260709155619-6cv8s"
+    LLM_MODEL: str = "ep-20260724171835-cr7ll"
     LLM_MAX_TOKENS: int = 4096
     LLM_TEMPERATURE: float = 0.7
+    LLM_PROVIDER: str = "deepseek"  # doubao | deepseek
+
+    # DeepSeek API
+    DEEPSEEK_API_KEY: str = "your_deepseek_api_key"
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
 
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"

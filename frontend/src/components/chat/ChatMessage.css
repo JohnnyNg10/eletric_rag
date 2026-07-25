@@ -504,3 +504,66 @@
   font-size: 11px;
   color: #8A8A80;
 }
+
+/* 引用 PDF 打开按钮 */
+.hover-card-pdf-action {
+  padding-top: 8px;
+  padding-bottom: 4px;
+}
+
+.hover-card-pdf-link,
+.citation-pdf-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #C8853F;
+  text-decoration: none;
+  padding: 4px 8px;
+  border: 1px solid #E2D9C8;
+  border-radius: 4px;
+  background: #FBF7EF;
+  transition: background 0.15s;
+}
+
+.hover-card-pdf-link:hover,
+.citation-pdf-link:hover {
+  background: #F0E3D0;
+  text-decoration: none;
+}
+
+/* 引用来源操作行 */
+.citation-actions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border, #e5e7eb);
+}
+
+/* 答案内文中的 [N] 可点击链接 */
+.citation-inline-link {
+  display: inline-block;
+  color: #C8853F;
+  font-size: 0.85em;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.citation-inline-link:hover {
+  background: #F0E3D0;
+  text-decoration: none;
+}
+
+/* 引用卡片点击高亮动画 */
+@keyframes citationHighlight {
+  0%   { box-shadow: 0 0 0 3px rgba(200, 133, 63, 0.6); }
+  60%  { box-shadow: 0 0 0 3px rgba(200, 133, 63, 0.3); }
+  100% { box-shadow: none; }
+}
+
+.citation-highlight {
+  animation: citationHighlight 2s ease-out forwards;
+}

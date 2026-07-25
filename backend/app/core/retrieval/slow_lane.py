@@ -91,7 +91,8 @@ class SlowLane:
         self.tools = {
             "retrieve_standard": self._retrieve_standard,
             "retrieve_clause": self._retrieve_clause,
-            "list_related_standards": self._list_related_standards
+            "list_related_standards": self._list_related_standards,
+            "retrieve_table": self._retrieve_table
         }
 
     async def execute(
@@ -298,42 +299,42 @@ class SlowLane:
         system_prompt = """你是一个专业的电力标准检索助手，负责决策是否需要继续检索以及使用什么工具。
 
 可用工具：
-1. retrieve_standard - 标准内容语义检索（主要工具）
+1. retrieve_table - 表格精确检索（表格查询首选工具）
+   参数：{"table_title": "表格标题关键词", "standard_id": "标准号" (可选)}
+   用途：直接从数据库检索结构化表格内容（content_type=table），返回完整 Markdown 表格
+   适用场景：
+   - 用户明确询问某张表："XX一览表"、"表A2"、"参数表"、"检查表"、"载流量表"
+   - 需要看到完整表格数据（行列结构）
+   - retrieve_standard 返回的是表格描述文字而非完整表格时，改用此工具
+
+2. retrieve_standard - 标准内容语义检索（通用工具）
    参数：{"query": "检索查询", "standard_ids": ["标准号1", "标准号2"] (可选)}
-   用途：使用语义搜索在所有标准或指定标准中查找相关内容
+   用途：语义搜索标准条款、说明性文字
    适用场景：
    - 用户提出技术问题，需要查找相关标准条款
    - 需要找到特定概念、要求、指标的具体规定
    - 比较不同标准对同一主题的规定
-   - 【重要】查询表格内容（见下方"表格检索指南"）
+   - ⚠️ 不适合查完整表格，表格查询请用 retrieve_table
 
-2. retrieve_clause - 精确条款定位
+3. retrieve_clause - 精确条款定位
    参数：{"standard_id": "标准号", "clause_number": "条款号"}
    用途：精确获取某标准某条款的完整原文
    适用场景：
    - 用户明确提到"某标准第X条"或"X.X.X条款"
    - 需要补充完整条款内容
 
-3. list_related_standards - 相关标准清单（辅助工具）
+4. list_related_standards - 相关标准清单（辅助工具）
    参数：{"keyword": "关键词", "category": "分类" (可选)}
    用途：仅列出包含特定关键词的标准清单（不返回实际内容）
    适用场景：
    - 用户问"有哪些标准涉及XX"
    - 需要先确定相关标准范围，再用 retrieve_standard 检索内容
 
-【表格检索指南】
-当用户询问表格内容时（如"XX表""一览表""检查表""参数表""载流量表"），使用 retrieve_standard 工具：
-- query 格式：表格标题全称 + 表号（如有） + 关键内容
-- 示例1：用户问"Ex i装置检查一览表" → query: "Ex i 装置检查一览表 表A2"
-- 示例2：用户问"电缆载流量表" → query: "电缆载流量表 导体截面积"
-- 示例3：用户问"表5规定了什么" → query: "表5 表格内容 检查项目"
-- ⚠️ 表格可能被分成多个chunk，第一次检索后若信息不完整，应继续检索补充
-
 工具选择原则：
-- 优先使用 retrieve_standard 进行语义搜索（最有效）
-- 只有明确知道条款号时才用 retrieve_clause
-- 只有需要"列举标准"而非"查找内容"时才用 list_related_standards
-- list_related_standards 后通常需要跟随 retrieve_standard 获取实际内容
+- 用户询问表格 → 优先用 retrieve_table
+- 用户提技术问题 → 用 retrieve_standard
+- 用户指定条款号 → 用 retrieve_clause
+- 用户要列举标准 → 用 list_related_standards，后续再跟 retrieve_standard
 
 返回 JSON 格式（不要添加其他说明文字）：
 {"action": "continue", "tool": "工具名", "params": {...}}  # 继续检索
@@ -371,11 +372,14 @@ class SlowLane:
 - 如果问题是"有哪些标准涉及光伏并网？"
   应选择：{{"action": "continue", "tool": "list_related_standards", "params": {{"keyword": "光伏并网"}}}}
 
-- 如果问题是"Ex i装置检查一览表有哪些项目？"
-  应选择：{{"action": "continue", "tool": "retrieve_standard", "params": {{"query": "Ex i 装置检查一览表 表A2 检查项目"}}}}
+- 如果问题是"给我展示 Ex i 装置检查一览表"
+  应选择：{{"action": "continue", "tool": "retrieve_table", "params": {{"table_title": "Ex i 装置检查一览表"}}}}
 
-- 如果问题是"GB 50217的电缆载流量表"
-  应选择：{{"action": "continue", "tool": "retrieve_standard", "params": {{"query": "GB 50217 电缆载流量表 导体截面", "standard_ids": ["GB 50217"]}}}}"""
+- 如果问题是"GB 50217 的电缆载流量表"
+  应选择：{{"action": "continue", "tool": "retrieve_table", "params": {{"table_title": "电缆载流量", "standard_id": "GB 50217"}}}}
+
+- 如果问题是"表A2是什么内容"
+  应选择：{{"action": "continue", "tool": "retrieve_table", "params": {{"table_title": "表A2"}}}}"""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -418,15 +422,7 @@ class SlowLane:
             return {"action": "sufficient"}
 
     def _build_context_summary(self, chunks: List[ChunkResult]) -> str:
-        """
-        构建已获取信息的摘要
-
-        Args:
-            chunks: 已获取的文档块
-
-        Returns:
-            摘要文本
-        """
+        """构建已获取信息的摘要，供 LLM 判断是否需要继续检索"""
         if not chunks:
             return "（尚未获取任何信息）"
 
@@ -438,14 +434,21 @@ class SlowLane:
                 by_standard[std_no] = []
             by_standard[std_no].append(chunk)
 
-        # 构建摘要
         summary_lines = []
-        for std_no, std_chunks in by_standard.items():
+        for std_no, std_chunks in list(by_standard.items())[:5]:
             clauses = [c.clause for c in std_chunks if c.clause]
-            clause_text = f"（条款：{', '.join(clauses[:3])}...）" if clauses else ""
-            summary_lines.append(f"- {std_no}: {len(std_chunks)} 条相关内容 {clause_text}")
+            clause_text = f"（条款：{', '.join(clauses[:3])}）" if clauses else ""
+            table_count = sum(1 for c in std_chunks if c.content_type == 'table')
+            type_hint = f"（含{table_count}个表格）" if table_count else ""
+            summary_lines.append(f"- {std_no}: {len(std_chunks)} 条相关内容{clause_text}{type_hint}")
 
-        return "\n".join(summary_lines[:5])  # 最多显示 5 个标准
+            # 每个标准最多展示 2 条内容片段，帮助 LLM 判断信息质量
+            for chunk in std_chunks[:2]:
+                snippet = chunk.content[:150].replace('\n', ' ')
+                content_type = f"[{chunk.content_type}] " if chunk.content_type and chunk.content_type != 'text' else ""
+                summary_lines.append(f"  └ {content_type}{snippet}…")
+
+        return "\n".join(summary_lines)
 
     async def _call_tool(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -622,6 +625,104 @@ class SlowLane:
         except Exception as e:
             logger.error(f"[SlowLane] list_related_standards error: {e}", exc_info=True)
             return {"chunks": [], "metadata": {"standards": []}}
+
+    async def _retrieve_table(
+        self,
+        table_title: str,
+        standard_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        表格精确检索：先查 Table 表的 title，再通过 chunk_id 找对应 chunk
+
+        Args:
+            table_title: 表格标题关键词（如 "Ex i 装置检查一览表"、"表A2"）
+            standard_id: 限定标准号（可选）
+
+        Returns:
+            {"chunks": List[ChunkResult], "metadata": dict}
+        """
+        try:
+            from app.db.models import Table as DBTable
+
+            # 先查 Table 表
+            query = self.db.query(DBTable).join(Document, DBTable.document_id == Document.id)
+
+            if standard_id:
+                query = query.filter(Document.standard_no.contains(standard_id))
+
+            # 提取中文字符序列作为关键词，完全绕开引号编码差异
+            import re
+            chinese_keywords = re.findall(r'[一-鿿]+', table_title)
+            # 也提取表号模式（如 A2、A.3）
+            table_num_keywords = re.findall(r'\b[A-Z][0-9A-Z\.]+\b', table_title)
+            keywords = [kw for kw in chinese_keywords + table_num_keywords if len(kw) >= 2]
+
+            if keywords:
+                conditions = [DBTable.title.like(f'%{kw}%') for kw in keywords]
+                if table_num_keywords:
+                    conditions += [DBTable.table_number.like(f'%{kw}%') for kw in table_num_keywords]
+                query = query.filter(or_(*conditions))
+
+            tables = query.limit(5).all()
+
+            if not tables:
+                logger.info(f"[SlowLane] retrieve_table: no table found in Table records for '{table_title}', falling back to semantic")
+                return await self._retrieve_standard(
+                    query=f"{table_title} 表格",
+                    standard_ids=[standard_id] if standard_id else None
+                )
+
+            # 通过 chunk_id 找对应的 Chunk；若 chunk_id 为空则直接用 markdown_content 构造
+            results = []
+            for table in tables:
+                if table.chunk_id:
+                    chunk = self.db.query(Chunk).filter(Chunk.id == table.chunk_id).first()
+                    if chunk:
+                        results.append(ChunkResult(
+                            chunk_id=chunk.id,
+                            document_id=chunk.document_id,
+                            content=chunk.content,
+                            score=1.0,
+                            document_title=chunk.document.title if chunk.document else None,
+                            standard_no=chunk.document.standard_no if chunk.document else None,
+                            doc_type=chunk.document.doc_type if chunk.document else None,
+                            category=chunk.document.category if chunk.document else None,
+                            voltage_level=chunk.document.voltage_level if chunk.document else None,
+                            clause=chunk.clause,
+                            chapter=chunk.chapter,
+                            page_start=chunk.page_start,
+                            page_end=chunk.page_end,
+                            content_type='table',
+                        ))
+                        continue
+
+                # chunk_id 为 NULL：直接用 Table.markdown_content 构建结果
+                if table.markdown_content:
+                    doc = self.db.query(Document).filter(Document.id == table.document_id).first()
+                    results.append(ChunkResult(
+                        chunk_id=table.id,
+                        document_id=table.document_id,
+                        content=table.markdown_content,
+                        score=1.0,
+                        document_title=doc.title if doc else None,
+                        standard_no=doc.standard_no if doc else None,
+                        doc_type=doc.doc_type if doc else None,
+                        category=doc.category if doc else None,
+                        voltage_level=doc.voltage_level if doc else None,
+                        page_start=table.page_number,
+                        page_end=table.page_number,
+                        content_type='table',
+                    ))
+
+            logger.info(f"[SlowLane] retrieve_table: found {len(results)} table chunks for '{table_title}'")
+            return {
+                "chunks": results,
+                "metadata": {"table_title": table_title, "standard_id": standard_id}
+            }
+
+        except Exception as e:
+            logger.error(f"[SlowLane] retrieve_table error: {e}", exc_info=True)
+            return {"chunks": [], "metadata": {}}
 
     def _aggregate_chunks(self, chunks: List[ChunkResult]) -> List[ChunkResult]:
         """

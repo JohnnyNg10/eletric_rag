@@ -1,10 +1,14 @@
 import React, { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import type { Message } from '../../hooks/useConversation';
 import type { Citation } from '../../types/query';
 import { CitationHoverCard } from '../result/CitationHoverCard';
 import { RelatedQueriesPanel } from '../result/RelatedQueriesPanel';
+import { preprocessAnswer } from '../../utils/query';
 import './ChatMessage.css';
 
 interface ChatMessageProps {
@@ -73,6 +77,19 @@ function AssistantMessage({ content, citations, metadata, status, onRelatedQuery
     setHoverAnchorRect(null);
   };
 
+  const handleCitationLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    e.preventDefault();
+    const match = href.match(/#citation-(\d+)/);
+    if (match) {
+      const element = document.getElementById(`citation-card-chat-${match[1]}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        element.classList.add('citation-highlight');
+        setTimeout(() => element.classList.remove('citation-highlight'), 2000);
+      }
+    }
+  };
+
   return (
     <div className="chat-message assistant-message">
       <div className="message-bubble assistant-bubble">
@@ -87,15 +104,30 @@ function AssistantMessage({ content, citations, metadata, status, onRelatedQuery
         {content && (
           <div className="message-content answer-markdown">
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
               components={{
                 table: ({ children }) => (
                   <div className="markdown-table-scroll">
                     <table>{children}</table>
                   </div>
                 ),
+                a: ({ href, children }) => {
+                  if (href?.startsWith('#citation-')) {
+                    return (
+                      <a
+                        href={href}
+                        className="citation-inline-link"
+                        onClick={(e) => handleCitationLinkClick(e, href)}
+                      >
+                        {children}
+                      </a>
+                    );
+                  }
+                  return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+                },
               }}
-            >{content}</ReactMarkdown>
+            >{preprocessAnswer(content)}</ReactMarkdown>
           </div>
         )}
 
@@ -169,7 +201,7 @@ function AssistantMessage({ content, citations, metadata, status, onRelatedQuery
 
 function CitationCard({ citation }: { citation: Citation }) {
   return (
-    <div className="citation-card">
+    <div className="citation-card" id={`citation-card-chat-${citation.id || citation.index}`}>
       <div className="citation-header">
         {citation.index && <span className="citation-index">[{citation.index}]</span>}
         {citation.standard_no && <span className="standard-no">{citation.standard_no}</span>}
@@ -200,6 +232,20 @@ function CitationCard({ citation }: { citation: Citation }) {
               )}
             </div>
           ))}
+        </div>
+      )}
+      {/* PDF 打开按钮 */}
+      {citation.pdf_url && (
+        <div className="citation-actions">
+          <a
+            href={`${citation.pdf_url}#page=${citation.page_number || 1}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="citation-pdf-link"
+            onClick={(e) => e.stopPropagation()}
+          >
+            📄 打开原文{citation.page_number ? ` (第${citation.page_number}页)` : ''}
+          </a>
         </div>
       )}
     </div>

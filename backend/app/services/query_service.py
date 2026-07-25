@@ -163,6 +163,42 @@ class QueryService:
             logger.error(f"Failed to get images for chunk {chunk_id}: {e}")
             return []
 
+    def _get_page_number(self, chunks: List, citation_index: int) -> Optional[int]:
+        """从 RerankResult 提取 page_start"""
+        try:
+            if 1 <= citation_index <= len(chunks):
+                chunk = chunks[citation_index - 1]
+                return chunk.page_start
+        except Exception as e:
+            logger.error(f"Failed to get page_number for citation {citation_index}: {e}")
+        return None
+
+    def _get_pdf_url(self, chunks: List, citation_index: int) -> Optional[str]:
+        """生成该引用对应文档的 PDF 预签名 URL"""
+        try:
+            if 1 <= citation_index <= len(chunks):
+                chunk = chunks[citation_index - 1]
+                if not chunk.document_id:
+                    logger.warning(f"[PDFUrl] citation {citation_index}: chunk has no document_id")
+                    return None
+                if not self.db:
+                    logger.warning(f"[PDFUrl] citation {citation_index}: db session is None")
+                    return None
+                from app.db.models import Document
+                doc = self.db.query(Document).filter(Document.id == chunk.document_id).first()
+                if not doc:
+                    logger.warning(f"[PDFUrl] citation {citation_index}: document {chunk.document_id} not found")
+                    return None
+                if not doc.file_path:
+                    logger.warning(f"[PDFUrl] citation {citation_index}: doc {doc.id} has no file_path")
+                    return None
+                url = object_store.get_pdf_url(doc.file_path, expires_seconds=3600)
+                logger.info(f"[PDFUrl] citation {citation_index}: doc={doc.id}, file_path={doc.file_path}, url={'OK' if url else 'FAILED'}")
+                return url
+        except Exception as e:
+            logger.error(f"Failed to get pdf_url for citation {citation_index}: {e}")
+        return None
+
     async def execute_query(
         self,
         query: str,
@@ -459,7 +495,9 @@ class QueryService:
                             'document_title': c.document_title,
                             'images': self._extract_images_from_rerank_result(
                                 chunks_for_generation[c.index - 1] if c.index <= len(chunks_for_generation) else None
-                            )
+                            ),
+                            'page_number': self._get_page_number(chunks_for_generation, c.index),
+                            'pdf_url': self._get_pdf_url(chunks_for_generation, c.index)
                         }
                         for c in generation_result.citations
                     ]

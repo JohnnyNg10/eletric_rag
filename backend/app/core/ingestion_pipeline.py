@@ -11,6 +11,7 @@
 """
 from typing import Dict, List, Optional
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -51,7 +52,8 @@ class DocumentIngestionPipeline:
     def ingest_document(
         self,
         pdf_path: str,
-        use_llm_classification: bool = False
+        use_llm_classification: bool = False,
+        custom_standard_no: Optional[str] = None,
     ) -> Dict:
         """
         完整的文档入库流程
@@ -116,6 +118,17 @@ class DocumentIngestionPipeline:
                 filename=pdf_path.name,
                 parsed_metadata=parsed['metadata']
             )
+
+            # Step 2.5: 应用用户自定义标准号（优先级高于自动识别）
+            if custom_standard_no:
+                logger.info(f"Using custom standard_no: {custom_standard_no}")
+                metadata['standard_no'] = custom_standard_no
+                # 尝试从标准号提取年份更新版本信息
+                year_match = re.search(r'-(\d{4})$', custom_standard_no)
+                if year_match:
+                    year = year_match.group(1)
+                    metadata['version'] = f"{year}版"
+                    metadata['publish_date'] = f"{year}-01-01"
 
             # Step 3: 文档分类
             logger.info("Step 3: Classifying document...")
@@ -584,20 +597,33 @@ class DocumentIngestionPipeline:
 
         parent_id_map = {}  # chunk.content_hash -> db_id
 
-        # === 阶段 1：向量化所有块，收集向量 ===
-        logger.info(f"Vectorizing {len(chunks)} chunks...")
+        # === 阶段 1：批量向量化所有块 ===
+        logger.info(f"Batch vectorizing {len(chunks)} chunks...")
 
-        # 父块向量化
-        parent_vectors = []
-        for chunk in parent_chunks:
-            dense_vector = self.embedder.encode(chunk.content).tolist()
-            parent_vectors.append((chunk, dense_vector))
+        # 收集所有文本
+        parent_texts = [c.content for c in parent_chunks]
+        child_texts = [c.content for c in child_chunks]
 
-        # 子块向量化
-        child_vectors = []
-        for chunk in child_chunks:
-            dense_vector = self.embedder.encode(chunk.content).tolist()
-            child_vectors.append((chunk, dense_vector))
+        # 批量编码
+        parent_dense_vectors = []
+        if parent_texts:
+            parent_dense_vectors = self.embedder.encode(parent_texts)
+            if len(parent_dense_vectors.shape) == 1:
+                parent_dense_vectors = [parent_dense_vectors.tolist()]
+            else:
+                parent_dense_vectors = [v.tolist() for v in parent_dense_vectors]
+
+        child_dense_vectors = []
+        if child_texts:
+            child_dense_vectors = self.embedder.encode(child_texts)
+            if len(child_dense_vectors.shape) == 1:
+                child_dense_vectors = [child_dense_vectors.tolist()]
+            else:
+                child_dense_vectors = [v.tolist() for v in child_dense_vectors]
+
+        # 组装 (chunk, vector) 对
+        parent_vectors = list(zip(parent_chunks, parent_dense_vectors))
+        child_vectors = list(zip(child_chunks, child_dense_vectors))
 
         # === 阶段 2：计算图文关联 ===
         associations = {}
@@ -646,47 +672,114 @@ class DocumentIngestionPipeline:
 
             associations = temp_associations
 
-        # === 阶段 3：写入数据库 ===
+        # === 阶段 3：写入 MySQL，收集向量点 ===
         logger.info("Indexing chunks to database...")
+
+        qdrant_points = []
+        es_docs = []
+
+        def _insert_chunk_record(chunk: Chunk, dense_vector: list, is_parent: bool) -> Optional[tuple]:
+            """插入单个 chunk 到 MySQL，返回 (db_chunk, vector_id) 或 None"""
+            # 用保存点隔离：单个 chunk 失败只回滚到保存点，不影响已提交的其他 chunks
+            savepoint = db.begin_nested()
+            try:
+                sparse_vector = self.embedder.encode_sparse(chunk.content)
+
+                db_chunk = DBChunk(
+                    document_id=chunk.document_id,
+                    parent_chunk_id=chunk.parent_chunk_id,
+                    content=chunk.content,
+                    content_hash=chunk.content_hash,
+                    chunk_type=chunk.chunk_type,
+                    content_type=chunk.content_type,
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                    chapter=chunk.chapter,
+                    section=chunk.section,
+                    clause=chunk.clause,
+                    position_in_doc=chunk.position_in_doc,
+                    token_count=chunk.token_count,
+                    char_count=chunk.char_count,
+                    meta_data=chunk.meta_data,
+                    related_chunk_ids=chunk.related_chunk_ids,
+                    has_dense_vector=True,
+                    has_sparse_vector=True
+                )
+                db.add(db_chunk)
+                db.flush()
+                vector_id = str(db_chunk.id)
+                db_chunk.vector_id = vector_id
+                savepoint.commit()
+
+                qdrant_points.append({
+                    "id": vector_id,
+                    "dense_vector": dense_vector,
+                    "sparse_vector": sparse_vector,
+                    "payload": {
+                        "doc_id": chunk.document_id,
+                        "chunk_id": db_chunk.id,
+                        "chunk_type": chunk.chunk_type,
+                        "content_type": chunk.content_type,
+                        "text": chunk.content,
+                        "chapter": chunk.chapter,
+                        "clause": chunk.clause,
+                        "related_chunk_ids": chunk.related_chunk_ids or [],
+                        **chunk.meta_data
+                    }
+                })
+                es_docs.append({
+                    "chunk_id": vector_id,
+                    "doc_id": chunk.document_id,
+                    "text": chunk.content,
+                    "content_type": chunk.content_type,
+                    "related_chunk_ids": chunk.related_chunk_ids or [],
+                    "standard_no": chunk.meta_data.get('standard_no'),
+                    "clause": chunk.clause,
+                    "category": chunk.meta_data.get('category'),
+                    "voltage_level": chunk.meta_data.get('voltage_level')
+                })
+                return db_chunk, vector_id
+            except Exception as e:
+                logger.error(f"Failed to insert {'parent' if is_parent else 'child'} chunk: {e}")
+                savepoint.rollback()  # 只回滚到保存点，不影响外层事务中已有的 chunks
+                return None
 
         # 处理父块
         for chunk, dense_vector in parent_vectors:
-            try:
-                # 填充关联的图片 chunk_id
-                temp_id = id(chunk)
-                if temp_id in associations:
-                    chunk.related_chunk_ids = associations[temp_id]
+            temp_id = id(chunk)
+            if temp_id in associations:
+                chunk.related_chunk_ids = associations[temp_id]
 
-                db_chunk, vector_id = self._index_single_chunk(chunk, db, dense_vector)
+            result = _insert_chunk_record(chunk, dense_vector, is_parent=True)
+            if result:
+                db_chunk, _ = result
                 parent_id_map[chunk.content_hash] = db_chunk.id
-
-                # 更新 associations 中的 temp_id 为真实 db_id
                 if temp_id in associations:
                     associations[db_chunk.id] = associations.pop(temp_id)
-
                 indexed_count += 1
-            except Exception as e:
-                logger.error(f"Failed to index parent chunk: {e}")
-                db.rollback()  # 回滚会话以继续处理后续块
 
         # 处理子块（设置 parent_chunk_id）
         for chunk, dense_vector in child_vectors:
-            try:
-                # 查找父块 ID（通过章节匹配）
-                parent_db_id = self._find_parent_id(chunk, parent_id_map, parent_chunks)
-                if parent_db_id:
-                    chunk.parent_chunk_id = parent_db_id
+            parent_db_id = self._find_parent_id(chunk, parent_id_map, parent_chunks)
+            if parent_db_id:
+                chunk.parent_chunk_id = parent_db_id
 
-                # 填充关联的图片 chunk_id
-                temp_id = id(chunk)
-                if temp_id in associations:
-                    chunk.related_chunk_ids = associations[temp_id]
+            temp_id = id(chunk)
+            if temp_id in associations:
+                chunk.related_chunk_ids = associations[temp_id]
 
-                db_chunk, vector_id = self._index_single_chunk(chunk, db, dense_vector)
+            result = _insert_chunk_record(chunk, dense_vector, is_parent=False)
+            if result:
                 indexed_count += 1
-            except Exception as e:
-                logger.error(f"Failed to index child chunk: {e}")
-                db.rollback()  # 回滚会话以继续处理后续块
+
+        # === 阶段 4：批量写入 Qdrant 和 Elasticsearch ===
+        if qdrant_points:
+            logger.info(f"Batch upserting {len(qdrant_points)} points to Qdrant...")
+            self.vector_store.upsert_points(qdrant_points)
+
+        if es_docs:
+            logger.info(f"Batch indexing {len(es_docs)} docs to Elasticsearch...")
+            self.search_engine.bulk_index(es_docs)
 
         logger.info(f"Indexed {indexed_count} chunks with associations")
         return indexed_count

@@ -78,6 +78,8 @@ export interface Citation {
   document_title?: string;
   chunk_id: string;
   images?: ImageInfo[];
+  page_number?: number;
+  pdf_url?: string;
 }
 
 export interface QueryResultMeta {

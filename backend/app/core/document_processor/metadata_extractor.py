@@ -52,28 +52,41 @@ class MetadataExtractor:
         """从文件名提取元数据"""
         metadata = {}
 
-        # 提取标准号（GB 1002-2024, DL/T 621-1997, GB+1002-2024）
+        # 提取标准号（GB 1002-2024, DL/T 621-1997, Q/XXX-2024）
         patterns = [
             r"(GB|DL|NB|JB|HG)[\s_/\\+]*([T\s]*)?[\s_]*(\d+(?:\.\d+)?)[_\s\-—]*(\d{4})",
+            r"(Q/[A-Za-z0-9]+)[_\s\-—]*(\d{4})",
         ]
 
         for pattern in patterns:
             match = re.search(pattern, filename, re.IGNORECASE)
             if match:
-                prefix = match.group(1).upper()
-                sub_type = match.group(2).strip() if match.group(2) else ""
-                number = match.group(3)
-                year = match.group(4)
+                groups = match.groups()
 
-                if sub_type:
-                    standard_no = f"{prefix}/{sub_type} {number}-{year}"
-                else:
-                    standard_no = f"{prefix} {number}-{year}"
+                # 第一个正则：4 组（prefix, sub_type, number, year）
+                if len(groups) == 4:
+                    prefix = groups[0].upper()
+                    sub_type = groups[1].strip() if groups[1] else ""
+                    number = groups[2]
+                    year = groups[3]
 
-                metadata["standard_no"] = standard_no
-                metadata["version"] = f"{year}版"
-                metadata["publish_date"] = f"{year}-01-01"
-                break
+                    if sub_type:
+                        standard_no = f"{prefix}/{sub_type} {number}-{year}"
+                    else:
+                        standard_no = f"{prefix} {number}-{year}"
+
+                    metadata["standard_no"] = standard_no
+                    metadata["version"] = f"{year}版"
+                    metadata["publish_date"] = f"{year}-01-01"
+                    break
+
+                # 第二个正则：2 组（Q/XXX, year）
+                elif len(groups) == 2:
+                    standard_no = f"{groups[0]}-{groups[1]}"
+                    metadata["standard_no"] = standard_no
+                    metadata["version"] = f"{groups[1]}版"
+                    metadata["publish_date"] = f"{groups[1]}-01-01"
+                    break
 
         return metadata
 

@@ -66,6 +66,8 @@ export function normalizeCitation(raw: any): Citation {
     content_preview: String(raw?.content_preview ?? raw?.content_snippet ?? ''),
     chunk_id: String(raw?.chunk_id ?? raw?.id ?? ''),
     images: raw?.images ?? undefined,
+    page_number: raw?.page_number ?? undefined,
+    pdf_url: raw?.pdf_url ?? undefined,
   };
 }
 
@@ -106,4 +108,30 @@ export function mergeCitation(list: Citation[], citation: Citation) {
     return list;
   }
   return [...list, citation];
+}
+
+/**
+ * 将答案文本中的 [N] 引用标记转为可点击的锚点链接
+ * 例如：[1] → [[1]](#citation-1)
+ */
+export function convertCitationMarkers(answer: string): string {
+  return answer.replace(/\[(\d+)\]/g, '[$1](#citation-$1)');
+}
+
+/**
+ * 将 LLM 输出的 LaTeX 数学分隔符转换为 remark-math 可识别格式
+ * \[...\] → $$...$$（块级公式）
+ * \(...\) → $...$（行内公式）
+ */
+export function preprocessMath(text: string): string {
+  return text
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, formula) => `$$${formula}$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, formula) => `$${formula}$`);
+}
+
+/**
+ * 统一预处理：数学公式转换 + 引用标记转换
+ */
+export function preprocessAnswer(answer: string): string {
+  return convertCitationMarkers(preprocessMath(answer));
 }

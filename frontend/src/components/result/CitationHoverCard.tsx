@@ -111,6 +111,19 @@ export function CitationHoverCard({ citation, anchorRect, onClose }: CitationHov
             包含 {citation.images.length} 张图片
           </div>
         )}
+        {citation.pdf_url && (
+          <div className="hover-card-pdf-action">
+            <a
+              href={`${citation.pdf_url}#page=${citation.page_number || 1}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover-card-pdf-link"
+              onClick={(e) => e.stopPropagation()}
+            >
+              📄 打开原文{citation.page_number ? ` (第${citation.page_number}页)` : ''}
+            </a>
+          </div>
+        )}
         <div className="hover-card-footer">
           <span className="hover-card-hint">按 ESC 或移开鼠标关闭</span>
         </div>
