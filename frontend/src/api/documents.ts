@@ -1,6 +1,6 @@
 import { getStoredApiBaseUrl, getStoredAuth } from '../utils/storage';
 import { ApiError, requestJson } from './client';
-import type { DocumentImportResponse, DocumentStatusResponse, DocumentDeleteResponse, DocumentListResponse, ProcessMode } from '../types/document';
+import type { DocumentImportResponse, DocumentStatusResponse, DocumentDeleteResponse, DocumentBatchDeleteResponse, DocumentListResponse, ProcessMode } from '../types/document';
 
 async function buildApiError(response: Response): Promise<ApiError> {
   const contentType = response.headers.get('content-type') || '';
@@ -74,6 +74,48 @@ export async function listDocuments(page: number = 1, pageSize: number = 20): Pr
 
 export async function deleteDocument(documentId: number): Promise<DocumentDeleteResponse> {
   return requestJson<DocumentDeleteResponse>(`/documents/${documentId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function batchDeleteDocuments(documentIds: number[]): Promise<DocumentBatchDeleteResponse> {
+  return requestJson<DocumentBatchDeleteResponse>('/documents/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ document_ids: documentIds }),
+  });
+}
+
+export interface OrphanDataScanResult {
+  mysql_doc_count: number;
+  qdrant: {
+    total: number;
+    orphans: number[];
+    error?: string;
+  };
+  elasticsearch: {
+    total: number;
+    orphans: number[];
+    error?: string;
+  };
+}
+
+export interface OrphanDataCleanupResult {
+  qdrant: {
+    deleted: number;
+    failed: number;
+  };
+  elasticsearch: {
+    deleted: number;
+    failed: number;
+  };
+}
+
+export async function scanOrphanData(): Promise<OrphanDataScanResult> {
+  return requestJson<OrphanDataScanResult>('/admin/orphan-data/scan');
+}
+
+export async function cleanupOrphanData(): Promise<OrphanDataCleanupResult> {
+  return requestJson<OrphanDataCleanupResult>('/admin/orphan-data/cleanup', {
     method: 'DELETE',
   });
 }
