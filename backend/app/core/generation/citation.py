@@ -65,11 +65,19 @@ class CitationExtractor:
 
             # 验证索引范围
             if not (1 <= idx <= len(chunks)):
-                logger.warning(f"[CitationExtractor] Invalid citation index: [{idx}], max={len(chunks)}")
+                logger.error(
+                    f"[CitationExtractor] Invalid citation index [{idx}] in answer, "
+                    f"valid range is [1-{len(chunks)}]. This indicates LLM hallucination."
+                )
                 continue
 
             # 获取对应的chunk
             chunk = chunks[idx - 1]
+
+            # 验证 chunk 数据完整性
+            if not chunk.chunk_id:
+                logger.error(f"[CitationExtractor] Chunk at index [{idx}] has no chunk_id, skipping citation")
+                continue
 
             # 构造Citation对象
             citations.append(Citation(
@@ -134,6 +142,10 @@ class CitationExtractor:
 
         if uncited_indices:
             issues.append(f"Uncited chunks: {sorted(uncited_indices)}")
+            logger.warning(
+                f"[CitationExtractor] {len(uncited_indices)}/{total_chunks} chunks were not cited in answer. "
+                f"This may indicate incomplete grounding."
+            )
 
         # 检查是否有答案但无引用
         has_content = len(answer.strip()) > 50
@@ -141,6 +153,17 @@ class CitationExtractor:
 
         if has_content and not has_citations:
             issues.append("Answer has content but no citations")
+            logger.error(
+                f"[CitationExtractor] Answer has {len(answer)} chars but zero citations. "
+                f"This is a critical grounding failure."
+            )
+
+        # 检查引用是否包含无效索引（已在 extract() 中过滤，但这里再次统计）
+        invalid_citations = [m.group(1) for m in self.citation_pattern.finditer(answer)
+                            if not (1 <= int(m.group(1)) <= total_chunks)]
+        if invalid_citations:
+            issues.append(f"Invalid citation indices found: {invalid_citations}")
+            logger.error(f"[CitationExtractor] Answer contains invalid citation indices: {invalid_citations}")
 
         coverage_rate = len(cited_indices) / total_chunks if total_chunks > 0 else 0.0
 

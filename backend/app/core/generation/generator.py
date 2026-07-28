@@ -412,8 +412,8 @@ class AnswerGenerator:
             result = json.loads(text)
             if isinstance(result, list) and all(isinstance(s, str) for s in result):
                 return result
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            logger.warning(f"生成器 JSON 数组直接解析失败: {e}")
 
         # 提取 [ ... ]
         match = re.search(r'\[.*?\]', text, re.DOTALL)
@@ -422,9 +422,10 @@ class AnswerGenerator:
                 result = json.loads(match.group(0))
                 if isinstance(result, list) and all(isinstance(s, str) for s in result):
                     return result
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning(f"生成器 JSON 数组提取失败: {e}")
 
+        logger.error(f"生成器 JSON 数组提取完全失败，原始文本: {text[:200]}")
         return []
 
 
