@@ -273,8 +273,8 @@ class SufficiencyChecker:
         # 尝试1: 直接解析
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            logger.warning(f"充分性判断 JSON 直接解析失败: {e}")
 
         # 尝试2: 提取```json ... ```
         import re
@@ -282,18 +282,19 @@ class SufficiencyChecker:
         if json_block:
             try:
                 return json.loads(json_block.group(1))
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning(f"充分性判断 JSON 代码块解析失败: {e}")
 
         # 尝试3: 提取第一个完整的{}
         json_obj = re.search(r'\{.*?\}', text, re.DOTALL)
         if json_obj:
             try:
                 return json.loads(json_obj.group(0))
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning(f"充分性判断 JSON 对象提取失败: {e}")
 
         # 所有尝试失败
+        logger.error(f"充分性判断 JSON 提取完全失败，原始文本: {text[:200]}")
         return None
 
 

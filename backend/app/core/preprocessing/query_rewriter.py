@@ -84,21 +84,6 @@ class QueryRewriter:
 
         return rewrites
 
-    async def generate_hyde(self, query: str) -> str:
-        """
-        生成HyDE假设答案（用于向量检索）
-
-        TODO: 使用LLM生成假设的专业答案（200字）
-
-        Args:
-            query: 查询文本
-
-        Returns:
-            str: 假设答案
-        """
-        # 当前返回空，未来集成LLM
-        return ""
-
     def is_comparison_query(self, query: str) -> bool:
         """判断是否为对比/差异/平衡类查询，应优先走慢车道"""
         return len(query) >= 12 and bool(_COMPARISON_RE.search(query))
@@ -175,8 +160,8 @@ class QueryRewriter:
             result = json.loads(text)
             if isinstance(result, list) and all(isinstance(s, str) for s in result):
                 return result
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            logger.warning(f"查询改写 JSON 数组直接解析失败: {e}")
 
         # 提取 [ ... ]
         match = re.search(r'\[.*?\]', text, re.DOTALL)
@@ -185,7 +170,8 @@ class QueryRewriter:
                 result = json.loads(match.group(0))
                 if isinstance(result, list) and all(isinstance(s, str) for s in result):
                     return result
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning(f"查询改写 JSON 数组提取失败: {e}")
 
+        logger.error(f"查询改写 JSON 数组提取完全失败，原始文本: {text[:200]}")
         return []
