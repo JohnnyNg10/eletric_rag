@@ -78,6 +78,9 @@ MinerU/result.json
 # Claude local settings
 .claude/settings.local.json
 
+# Internal deployment docs (contains server IPs, internal network info)
+docs/deployment/企业内网服务器部署方案.md
+
 # Temporary/debug files
 *.json.bak
 backend/response.json
@@ -93,6 +96,7 @@ backend/test_chunk_result.txt
 *.md
 !README.md
 !docs/**/*.md
+docs/deployment/企业内网服务器部署方案.md
 !CLAUDE.md
 !*.example.md
 !RAG系统功能提升建议.md
