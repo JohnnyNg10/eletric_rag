@@ -3,17 +3,29 @@ Elasticsearch 全文检索引擎客户端
 
 支持：
 - BM25 关键词检索
-- 自定义分词器（ik_max_word）
+- jieba 应用层中文分词（索引与查询侧一致）
 - 多字段查询
 - 短语匹配
 """
 from typing import List, Dict, Optional, Any
 from elasticsearch import Elasticsearch
 import logging
+import jieba
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def tokenize_zh(text: str) -> str:
+    """
+    中文分词并以空格连接，供 ES whitespace tokenizer 使用。
+
+    索引与查询两侧必须都经过此函数，否则 token 不匹配导致召回为空。
+    """
+    if not text:
+        return ""
+    return " ".join(jieba.cut_for_search(text))
 
 
 class SearchEngine:
@@ -44,7 +56,7 @@ class SearchEngine:
                         "analyzer": {
                             "electric_analyzer": {
                                 "type": "custom",
-                                "tokenizer": "ik_max_word",
+                                "tokenizer": "whitespace",
                                 "filter": ["lowercase"]
                             }
                         }
@@ -55,12 +67,15 @@ class SearchEngine:
                         "doc_id": {"type": "keyword"},
                         "chunk_id": {"type": "keyword"},
                         "chunk_type": {"type": "keyword"},
+                        # 原文：仅存储，不参与检索（用于展示与引用溯源）
                         "text": {
                             "type": "text",
-                            "analyzer": "electric_analyzer",
-                            "fields": {
-                                "keyword": {"type": "keyword"}
-                            }
+                            "index": False
+                        },
+                        # jieba 分词后的检索字段（空格分隔）
+                        "text_seg": {
+                            "type": "text",
+                            "analyzer": "electric_analyzer"
                         },
                         "standard_no": {"type": "keyword"},
                         "clause": {"type": "keyword"},
@@ -107,10 +122,13 @@ class SearchEngine:
             # 构建批量操作
             actions = []
             for doc in documents:
+                # 自动生成 jieba 分词字段，保持索引侧与查询侧一致
+                source = dict(doc)
+                source["text_seg"] = tokenize_zh(source.get("text", ""))
                 action = {
                     "_index": self.index_name,
                     "_id": doc["chunk_id"],
-                    "_source": doc
+                    "_source": source
                 }
                 actions.append(action)
 
@@ -145,12 +163,12 @@ class SearchEngine:
             检索结果列表
         """
         try:
-            # 构建查询
+            # 构建查询（查询侧同样经过 jieba 分词）
             must_clauses = [
                 {
                     "match": {
-                        "text": {
-                            "query": query,
+                        "text_seg": {
+                            "query": tokenize_zh(query),
                             "operator": "and"
                         }
                     }
@@ -211,7 +229,7 @@ class SearchEngine:
             search_body = {
                 "query": {
                     "match_phrase": {
-                        "text": phrase
+                        "text_seg": tokenize_zh(phrase)
                     }
                 },
                 "size": size
@@ -244,7 +262,7 @@ class SearchEngine:
 
         Args:
             query: 查询字符串
-            fields: 查询字段列表（带权重），如 ["text^2", "clause_title^3"]
+            fields: 查询字段列表（带权重），如 ["text_seg^2", "standard_no^3"]
             size: 返回结果数量
 
         Returns:
@@ -252,12 +270,12 @@ class SearchEngine:
         """
         try:
             if not fields:
-                fields = ["text^2", "standard_no^3"]
+                fields = ["text_seg^2", "standard_no^3"]
 
             search_body = {
                 "query": {
                     "multi_match": {
-                        "query": query,
+                        "query": tokenize_zh(query),
                         "fields": fields,
                         "type": "best_fields"
                     }
@@ -339,8 +357,8 @@ class SearchEngine:
             if query_text:
                 query_clause = {
                     "multi_match": {
-                        "query": query_text,
-                        "fields": ["text^2", "standard_no^3"],
+                        "query": tokenize_zh(query_text),
+                        "fields": ["text_seg^2", "standard_no^3"],
                         "type": "best_fields"
                     }
                 }

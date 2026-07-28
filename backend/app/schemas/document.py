@@ -39,6 +39,26 @@ class DocumentDeleteResponse(BaseModel):
     deleted_counts: dict
 
 
+class DocumentBatchDeleteRequest(BaseModel):
+    document_ids: list[int]
+
+
+class DocumentDeleteResult(BaseModel):
+    document_id: int
+    title: Optional[str] = None
+    success: bool
+    error: Optional[str] = None
+    deleted_counts: Optional[dict] = None
+
+
+class DocumentBatchDeleteResponse(BaseModel):
+    total: int
+    succeeded: int
+    failed: int
+    results: list[DocumentDeleteResult]
+    deleted_counts: dict
+
+
 class DocumentListItem(BaseModel):
     id: int
     title: str

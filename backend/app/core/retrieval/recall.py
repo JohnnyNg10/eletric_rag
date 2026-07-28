@@ -17,7 +17,7 @@ import time
 from app.db.models import Document, Chunk
 from app.schemas.retrieval import ChunkResult
 from app.storage.vector_store import VectorStore
-from app.storage.search_engine import SearchEngine
+from app.storage.search_engine import SearchEngine, tokenize_zh
 from app.core.embedding.embedder import get_embedder
 
 logger = logging.getLogger(__name__)
@@ -241,15 +241,15 @@ class KeywordRecall:
         try:
             logger.warning(f"[KeywordRecall] START query='{query}', top_k={top_k}")
 
-            # 构建 ES 查询
+            # 构建 ES 查询（查询侧经 jieba 分词，与索引侧 text_seg 一致）
             es_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {
                                 "multi_match": {
-                                    "query": query,
-                                    "fields": ["text^2", "clause^1.5"],
+                                    "query": tokenize_zh(query),
+                                    "fields": ["text_seg^2", "clause^1.5"],
                                     "type": "best_fields",
                                     "operator": "or"
                                 }

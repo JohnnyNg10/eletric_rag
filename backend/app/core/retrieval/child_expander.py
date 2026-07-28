@@ -247,7 +247,19 @@ class ChildChunkExpander:
             Dict[chunk_id, vector]
         """
         try:
-            vector_ids = [c.vector_id for c in children]
+            import uuid
+
+            # 转换 vector_id 为 UUID（与 upsert_points 逻辑一致）
+            vector_ids = []
+            for c in children:
+                vid = c.vector_id
+                if isinstance(vid, str):
+                    try:
+                        vid = uuid.UUID(vid)
+                    except ValueError:
+                        vid = uuid.uuid5(uuid.NAMESPACE_DNS, vid)
+                vector_ids.append(str(vid))
+
             points = self.vector_store.client.retrieve(
                 collection_name=settings.QDRANT_COLLECTION,
                 ids=vector_ids,
@@ -255,10 +267,19 @@ class ChildChunkExpander:
             )
 
             result = {}
-            id_to_chunk = {c.vector_id: c for c in children}
+            # 建立 UUID -> chunk 的映射
+            uuid_to_chunk = {}
+            for c in children:
+                vid = c.vector_id
+                if isinstance(vid, str):
+                    try:
+                        vid_uuid = uuid.UUID(vid)
+                    except ValueError:
+                        vid_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, vid)
+                    uuid_to_chunk[str(vid_uuid)] = c
 
             for point in points:
-                chunk = id_to_chunk.get(point.id)
+                chunk = uuid_to_chunk.get(str(point.id))
                 if chunk and point.vector:
                     # Qdrant 返回的 vector 可能是 dict (稠密+稀疏)，取 dense
                     if isinstance(point.vector, dict):

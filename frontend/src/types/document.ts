@@ -35,6 +35,22 @@ export interface DocumentDeleteResponse {
   };
 }
 
+export interface DocumentDeleteResult {
+  document_id: number;
+  title: string | null;
+  success: boolean;
+  error: string | null;
+  deleted_counts: DocumentDeleteResponse['deleted_counts'] | null;
+}
+
+export interface DocumentBatchDeleteResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: DocumentDeleteResult[];
+  deleted_counts: DocumentDeleteResponse['deleted_counts'];
+}
+
 export interface DocumentListItem {
   id: number;
   title: string;

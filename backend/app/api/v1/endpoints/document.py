@@ -13,7 +13,15 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.db.models import Document, User
-from app.schemas.document import DocumentImportResponse, DocumentStatusResponse, DocumentDeleteResponse, DocumentListResponse
+from app.schemas.document import (
+    DocumentImportResponse,
+    DocumentStatusResponse,
+    DocumentDeleteResponse,
+    DocumentListResponse,
+    DocumentBatchDeleteRequest,
+    DocumentBatchDeleteResponse,
+    DocumentDeleteResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,13 +204,21 @@ async def get_document_status(
     return doc
 
 
-@router.delete("/{document_id}", response_model=DocumentDeleteResponse)
-async def delete_document(
-    document_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """删除文档及所有关联数据（MySQL、Qdrant、Elasticsearch、MinIO）"""
+_DELETED_COUNT_KEYS = ("chunks", "images", "tables", "qdrant_points", "es_docs", "minio_objects")
+
+
+def _delete_document_data(document_id: int, db: Session) -> tuple[str, dict]:
+    """
+    删除单个文档及所有关联数据（MySQL、Qdrant、Elasticsearch、MinIO）。
+
+    不提交事务，由调用方决定提交时机（批量删除需要逐个提交）。
+
+    Returns:
+        (文档标题, 各存储删除计数)
+
+    Raises:
+        ValueError: 文档不存在
+    """
     from app.db.models import Chunk, Image, Table
     from app.storage.vector_store import vector_store
     from app.storage.search_engine import search_engine
@@ -211,39 +227,28 @@ async def delete_document(
     # 1. 查询文档
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"文档 {document_id} 不存在",
-        )
+        raise ValueError(f"文档 {document_id} 不存在")
 
     doc_title = doc.title
-    deleted_counts = {
-        "chunks": 0,
-        "images": 0,
-        "tables": 0,
-        "qdrant_points": 0,
-        "es_docs": 0,
-        "minio_objects": 0
-    }
+    deleted_counts = {key: 0 for key in _DELETED_COUNT_KEYS}
 
-    # 2. 删除 Qdrant 向量点
+    # MySQL 的 chunk 计数仅用于统计展示，不能作为是否清理外部存储的判据：
+    # 入库中途失败时 MySQL 可能已回滚而 Qdrant/ES 已写入，一旦跳过就会留下永久孤儿数据。
+    chunk_count = db.query(Chunk).filter(Chunk.document_id == document_id).count()
+
+    # 2. 删除 Qdrant 向量点（无条件执行）
     try:
-        chunk_count = db.query(Chunk).filter(Chunk.document_id == document_id).count()
-        if chunk_count:
-            vector_store.delete_by_doc_id(str(document_id))
-            deleted_counts["qdrant_points"] = chunk_count
-            logger.info(f"已删除 {chunk_count} 个 Qdrant 向量点")
+        vector_store.delete_by_doc_id(str(document_id))
+        deleted_counts["qdrant_points"] = chunk_count
+        logger.info(f"已删除 doc_id={document_id} 的 Qdrant 向量点（MySQL 记录 {chunk_count} 个）")
     except Exception as e:
         logger.warning(f"删除 Qdrant 向量失败: {e}")
 
-    # 3. 删除 Elasticsearch 文档
+    # 3. 删除 Elasticsearch 文档（无条件执行）
     try:
-        chunks = db.query(Chunk).filter(Chunk.document_id == document_id).all()
-        if chunks:
-            # 使用 doc_id 删除所有关联的 chunks
-            search_engine.delete_by_doc_id(str(document_id))
-            deleted_counts["es_docs"] = len(chunks)
-            logger.info(f"已删除 {len(chunks)} 个 ES 文档")
+        search_engine.delete_by_doc_id(str(document_id))
+        deleted_counts["es_docs"] = chunk_count
+        logger.info(f"已删除 doc_id={document_id} 的 ES 文档（MySQL 记录 {chunk_count} 个）")
     except Exception as e:
         logger.warning(f"删除 ES 文档失败: {e}")
 
@@ -279,9 +284,76 @@ async def delete_document(
     db.query(Image).filter(Image.document_id == document_id).delete()
     db.query(Table).filter(Table.document_id == document_id).delete()
     db.delete(doc)
-    db.commit()
 
     logger.info(f"文档 {document_id} ({doc_title}) 已完全删除")
+
+    return doc_title, deleted_counts
+
+
+@router.post("/batch-delete", response_model=DocumentBatchDeleteResponse)
+async def batch_delete_documents(
+    payload: DocumentBatchDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    批量删除文档。
+
+    逐个文档独立提交，单个失败不影响其余文档，响应中返回每个文档的成功/失败明细。
+    """
+    results: list[DocumentDeleteResult] = []
+    aggregated = {key: 0 for key in _DELETED_COUNT_KEYS}
+
+    for doc_id in payload.document_ids:
+        try:
+            title, counts = _delete_document_data(doc_id, db)
+            db.commit()
+        except ValueError as e:
+            db.rollback()
+            results.append(DocumentDeleteResult(document_id=doc_id, success=False, error=str(e)))
+            continue
+        except Exception as e:
+            db.rollback()
+            logger.error(f"批量删除文档 {doc_id} 失败: {e}", exc_info=True)
+            results.append(DocumentDeleteResult(document_id=doc_id, success=False, error=str(e)))
+            continue
+
+        for key in _DELETED_COUNT_KEYS:
+            aggregated[key] += counts.get(key, 0)
+        results.append(DocumentDeleteResult(
+            document_id=doc_id,
+            title=title,
+            success=True,
+            deleted_counts=counts,
+        ))
+
+    succeeded = sum(1 for r in results if r.success)
+    logger.info(f"批量删除完成: 共 {len(results)} 个，成功 {succeeded} 个")
+
+    return DocumentBatchDeleteResponse(
+        total=len(results),
+        succeeded=succeeded,
+        failed=len(results) - succeeded,
+        results=results,
+        deleted_counts=aggregated,
+    )
+
+
+@router.delete("/{document_id}", response_model=DocumentDeleteResponse)
+async def delete_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """删除文档及所有关联数据（MySQL、Qdrant、Elasticsearch、MinIO）"""
+    try:
+        doc_title, deleted_counts = _delete_document_data(document_id, db)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    db.commit()
 
     return DocumentDeleteResponse(
         document_id=document_id,

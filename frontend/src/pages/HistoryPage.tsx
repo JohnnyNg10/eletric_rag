@@ -68,6 +68,9 @@ export function HistoryPage() {
       <div className="panel-header-row">
         <div>
           <h1 className="panel-title">查询历史</h1>
+          <p className="panel-subtitle">
+            {history ? `共 ${history.total} 条记录` : '查看过往的提问与答案'}
+          </p>
         </div>
         <button type="button" className="primary-button" onClick={() => navigate('/search')}>
           新建查询
@@ -123,50 +126,45 @@ export function HistoryPage() {
             <div className="history-detail">
               {selectedItem ? (
                 <>
-                  <div className="info-card">
-                    <div><strong>问题：</strong>{selectedItem.query}</div>
-                    <div><strong>记录 ID：</strong>{selectedItem.query_log_id}</div>
-                    <div><strong>查询时间：</strong>{formatTime(selectedItem.created_at)}</div>
-                  </div>
-
-                  <div className="detail-grid">
-                    <div className="info-card compact">
-                      <div className="section-title">检索方式</div>
-                      <div>{LANE_META[selectedItem.lane].label}</div>
-                    </div>
-                    <div className="info-card compact">
-                      <div className="section-title">耗时</div>
-                      <div>{typeof selectedItem.total_time === 'number' ? `${selectedItem.total_time}ms` : '未知'}</div>
-                    </div>
-                    <div className="info-card compact">
-                      <div className="section-title">反馈</div>
-                      <div>{selectedItem.feedback_score ? `${selectedItem.feedback_score}/5` : '未提交'}</div>
-                    </div>
-                    <div className="info-card compact">
-                      <div className="section-title">答案摘要</div>
-                      <div>{selectedItem.answer ? '已生成' : '暂无答案'}</div>
+                  <div className="history-detail-header">
+                    <div className="history-detail-query">{selectedItem.query}</div>
+                    <div className="history-detail-meta">
+                      <span className={`lane-badge ${LANE_META[selectedItem.lane].className}`}>
+                        <span aria-hidden="true">{LANE_META[selectedItem.lane].icon}</span>
+                        <span>{LANE_META[selectedItem.lane].label}</span>
+                      </span>
+                      <span className="meta-pill">{formatTime(selectedItem.created_at)}</span>
+                      <span className="meta-pill">
+                        {typeof selectedItem.total_time === 'number' ? `耗时 ${selectedItem.total_time}ms` : '耗时未知'}
+                      </span>
+                      <span className="meta-pill">
+                        {selectedItem.feedback_score ? `评分 ${selectedItem.feedback_score}/5` : '未评分'}
+                      </span>
+                      <span className="meta-pill">#{selectedItem.query_log_id}</span>
                     </div>
                   </div>
 
-                  <div className="answer-article">
-                    <div className="section-title">答案预览</div>
+                  <div className="answer-article history-detail-answer">
+                    <div className="section-title">答案</div>
                     <p className="page-description">{selectedItem.answer || '该条记录暂无答案文本。'}</p>
                   </div>
 
-                  <div className="panel-actions">
+                  <div className="panel-actions end no-margin">
+                    <button type="button" className="ghost-button" onClick={() => navigate('/search')}>
+                      新建查询
+                    </button>
                     <button
                       type="button"
                       className="primary-button"
                       onClick={() => navigate(`/search?q=${encodeURIComponent(selectedItem.query)}`)}
                     >
-                      回到查询页再次提问
-                    </button>
-                    <button type="button" className="ghost-button" onClick={() => navigate('/search')}>
-                      新建一次查询
+                      再次提问
                     </button>
                   </div>
                 </>
-              ) : null}
+              ) : (
+                <div className="history-detail-empty">从左侧选择一条记录查看详情</div>
+              )}
             </div>
           </div>
 

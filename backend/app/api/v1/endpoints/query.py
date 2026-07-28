@@ -40,7 +40,7 @@ def _get_optimizer() -> QueryOptimizer:
     return QueryOptimizer()
 
 
-@router.post("/", response_model=QueryResponse, summary="执行查询")
+@router.post("", response_model=QueryResponse, summary="执行查询")
 async def execute_query(
     request: QueryRequest,
     current_user: User = Depends(get_current_user),

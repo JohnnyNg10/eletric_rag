@@ -58,9 +58,12 @@ services:
     networks:
       - electric-rag-net
 
-  # Elasticsearch 全文检索
+  # Elasticsearch 全文检索（含IK中文分词插件）
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.elasticsearch
+    image: electric-rag-elasticsearch:8.11.1-ik
     container_name: electric-rag-elasticsearch
     environment:
       - discovery.type=single-node
