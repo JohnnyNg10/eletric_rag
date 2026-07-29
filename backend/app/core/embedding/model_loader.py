@@ -5,10 +5,27 @@ import os
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
-from huggingface_hub import snapshot_download, hf_hub_download
-from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
+
+# 动态导入下载库（优先使用 ModelScope，国内访问更快）
+try:
+    from modelscope import snapshot_download
+    DOWNLOAD_SOURCE = "modelscope"
+    logger.info("Using ModelScope for model download (国内镜像)")
+except ImportError:
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import HfHubHTTPError
+    DOWNLOAD_SOURCE = "huggingface"
+    logger.info("Using HuggingFace for model download")
+
+# ModelScope 模型ID映射（HuggingFace → ModelScope）
+MODELSCOPE_MODEL_MAP = {
+    "BAAI/bge-large-zh-v1.5": "AI-ModelScope/bge-large-zh-v1.5",
+    "BAAI/bge-reranker-large": "AI-ModelScope/bge-reranker-large",
+    "BAAI/bge-reranker-base": "AI-ModelScope/bge-reranker-base",
+    "efficient-splade/efficient-splade-VI-BT-large-doc": "AI-ModelScope/efficient-splade-VI-BT-large-doc",
+}
 
 
 class ModelDownloadManager:
@@ -60,12 +77,12 @@ class ModelDownloadManager:
         proxy: Optional[str] = None
     ) -> Path:
         """
-        下载HuggingFace模型
+        下载模型（支持 HuggingFace 和 ModelScope）
 
         Args:
-            model_name: HuggingFace模型名称
+            model_name: 模型名称（HuggingFace格式，如 BAAI/bge-large-zh-v1.5）
             force: 是否强制重新下载
-            proxy: HTTP代理（如 http://127.0.0.1:7897）
+            proxy: HTTP代理（仅 HuggingFace 有效）
 
         Returns:
             Path: 模型本地路径
@@ -81,52 +98,77 @@ class ModelDownloadManager:
         logger.info(f"Downloading model: {model_name}")
         logger.info(f"Destination: {model_path.absolute()}")
 
-        # 设置代理环境变量（如果提供）
-        env_backup = {}
-        if proxy:
-            logger.info(f"Using proxy: {proxy}")
-            env_backup = {
-                "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
-                "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
-            }
-            os.environ["HTTP_PROXY"] = proxy
-            os.environ["HTTPS_PROXY"] = proxy
+        # 根据下载源选择模型ID
+        if DOWNLOAD_SOURCE == "modelscope":
+            # 使用 ModelScope 映射
+            model_id = MODELSCOPE_MODEL_MAP.get(model_name, model_name)
+            logger.info(f"Using ModelScope: {model_id}")
 
-        try:
-            # 使用 snapshot_download 下载完整模型
-            downloaded_path = snapshot_download(
-                repo_id=model_name,
-                cache_dir=str(self.models_dir),
-                local_dir=str(model_path),
-                local_dir_use_symlinks=False,
-                resume_download=True,
-            )
+            try:
+                downloaded_path = snapshot_download(
+                    model_id=model_id,
+                    cache_dir=str(model_path),
+                )
+                logger.info(f"✓ Model downloaded successfully: {model_name}")
+                logger.info(f"  Path: {downloaded_path}")
+                return Path(downloaded_path)
 
-            logger.info(f"✓ Model downloaded successfully: {model_name}")
-            logger.info(f"  Path: {downloaded_path}")
+            except Exception as e:
+                logger.error(f"✗ Failed to download model {model_name} from ModelScope: {e}")
+                logger.error("Please check:")
+                logger.error("  1. Network connection")
+                logger.error("  2. Model ID is correct in ModelScope")
+                logger.error("  3. Install modelscope: pip install modelscope")
+                raise
 
-            return Path(downloaded_path)
+        else:
+            # 使用 HuggingFace
+            logger.info(f"Using HuggingFace: {model_name}")
 
-        except HfHubHTTPError as e:
-            logger.error(f"✗ Failed to download model {model_name}: {e}")
-            logger.error("Please check:")
-            logger.error("  1. Network connection (VPN/proxy)")
-            logger.error("  2. Model name is correct")
-            logger.error("  3. HuggingFace access token (if model is private)")
-            raise
-
-        except Exception as e:
-            logger.error(f"✗ Unexpected error downloading {model_name}: {e}")
-            raise
-
-        finally:
-            # 恢复环境变量
+            # 设置代理环境变量（如果提供）
+            env_backup = {}
             if proxy:
-                for key, value in env_backup.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
+                logger.info(f"Using proxy: {proxy}")
+                env_backup = {
+                    "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
+                    "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
+                }
+                os.environ["HTTP_PROXY"] = proxy
+                os.environ["HTTPS_PROXY"] = proxy
+
+            try:
+                downloaded_path = snapshot_download(
+                    repo_id=model_name,
+                    cache_dir=str(self.models_dir),
+                    local_dir=str(model_path),
+                    local_dir_use_symlinks=False,
+                    resume_download=True,
+                )
+
+                logger.info(f"✓ Model downloaded successfully: {model_name}")
+                logger.info(f"  Path: {downloaded_path}")
+                return Path(downloaded_path)
+
+            except HfHubHTTPError as e:
+                logger.error(f"✗ Failed to download model {model_name}: {e}")
+                logger.error("Please check:")
+                logger.error("  1. Network connection (VPN/proxy)")
+                logger.error("  2. Model name is correct")
+                logger.error("  3. HuggingFace access token (if model is private)")
+                raise
+
+            except Exception as e:
+                logger.error(f"✗ Unexpected error downloading {model_name}: {e}")
+                raise
+
+            finally:
+                # 恢复环境变量
+                if proxy:
+                    for key, value in env_backup.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
 
     def download_all_models(
         self,

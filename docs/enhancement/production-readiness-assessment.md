@@ -84,12 +84,20 @@
 
 ---
 
-### 1.5 嵌入层 (Embedding Layer) - 🟡 性能问题
+### 1.5 嵌入层 (Embedding Layer) - ✅ 已解决
 
-**文件**: `backend/app/core/embedding/model_loader.py`
-- **行 207**: `# TODO: 实际加载模型到GPU`
-- **行 226**: `# TODO: 实际加载模型`
-- **影响**: GPU 加速可能未实际启用，性能存疑
+**原问题**: GPU 加速未启用，模型加载写死 CPU
+- `embedder.py:74` 写死 `device='cpu'`
+- sparse model 加载后未 `.to(device)`
+- `encode_sparse()` 中 inputs 未上 GPU
+
+**解决方案** (2026-07-28):
+- `Embedder.__init__()` 中增加设备检测: `self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+- dense model: `SentenceTransformer(dense_path, device=str(self.device))`
+- sparse model: 加载后 `.to(self.device)`, `encode_sparse()` 中 `inputs = {k: v.to(self.device) for k, v in inputs.items()}`
+- reranker 已正确实现 GPU 支持（无需修改）
+
+**影响**: 现在三层模型（embedding dense/sparse + reranker coarse/fine）均可自动使用 GPU 加速
 
 ---
 

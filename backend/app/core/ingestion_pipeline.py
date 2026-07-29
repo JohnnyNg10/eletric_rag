@@ -254,15 +254,15 @@ class DocumentIngestionPipeline:
         if metadata.get('publish_date'):
             try:
                 publish_date = datetime.strptime(metadata['publish_date'], '%Y-%m-%d').date()
-            except:
-                pass
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid publish_date format: {metadata.get('publish_date')!r} - {e}")
 
         implement_date = None
         if metadata.get('implement_date'):
             try:
                 implement_date = datetime.strptime(metadata['implement_date'], '%Y-%m-%d').date()
-            except:
-                pass
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid implement_date format: {metadata.get('implement_date')!r} - {e}")
 
         return Document(
             title=metadata.get('title', pdf_path.stem),
@@ -438,107 +438,105 @@ class DocumentIngestionPipeline:
         db
     ) -> tuple:
         """
-        从 markdown 中提取 HTML 表格，使用 pandas 解析为结构化文本并入库
+        从 markdown 中提取 HTML 表格，使用 pandas 解析为结构化文本并入库。
+
+        MinerU 输出格式：表格标题单独占一行，紧接着下一行是 <table>…</table>（整行）。
 
         Returns:
             (tables_count, table_chunks)
             table_chunks: List[Chunk]，content_type='table'，待后续向量化
         """
-        import re
         import pandas as pd
         from io import StringIO
 
-        def html_table_to_markdown(html: str, title: str = None) -> str:
-            """将 HTML 表格用 pandas 解析并转为 Markdown 文本"""
+        # 匹配"表 编号 标题"，支持：表1/表A2/表 2/续表A2/续表1 等形式
+        _TITLE_RE = re.compile(
+            r'^(?:续\s*)?表\s*'
+            r'([A-Za-z0-9０-９][A-Za-z0-9０-９\.\-]*)'  # 编号
+            r'(?:\s+(.+))?$'                               # 可选标题文字
+        )
+        # 仅编号无标题文字的降级匹配（如"表1"后无文字）
+        _TITLE_NO_TEXT_RE = re.compile(r'^(?:续\s*)?表\s*([A-Za-z0-9０-９][A-Za-z0-9０-９\.\-]*)$')
+
+        def html_table_to_gfm(html: str, title: str = None) -> str:
+            """将 HTML 表格用 pandas 解析并转为 GFM Markdown 文本"""
             try:
-                # pandas.read_html 自动处理 colspan/rowspan，指定 lxml 解析器
                 dfs = pd.read_html(StringIO(html), flavor='lxml', header=None)
                 if not dfs:
                     return ''
+                df = dfs[0].fillna('').astype(str)
 
-                df = dfs[0]
-
-                # 清理 NaN，转为字符串
-                df = df.fillna('')
-                df = df.astype(str)
-
-                # 转为标准 GFM Markdown 表格（remarkGfm 可直接渲染）
                 lines = []
                 if title:
                     lines.append(title)
                     lines.append('')
 
-                for idx, row in df.iterrows():
+                for row_idx, row in df.iterrows():
                     cells = [str(c).strip().replace('\n', ' ').replace('|', '\\|') for c in row]
-                    line = '| ' + ' | '.join(cells) + ' |'
-                    lines.append(line)
-                    # 第一行后插入 GFM 分隔行
-                    if idx == 0:
-                        sep = '| ' + ' | '.join(['---'] * len(cells)) + ' |'
-                        lines.append(sep)
+                    lines.append('| ' + ' | '.join(cells) + ' |')
+                    if row_idx == 0:
+                        lines.append('| ' + ' | '.join(['---'] * len(cells)) + ' |')
 
                 return '\n'.join(lines)
             except Exception as e:
                 logger.warning(f"pandas 解析表格失败: {e}")
                 return ''
 
-        # 匹配 markdown 中的完整 <table>...</table>
-        table_pattern = re.compile(r'<table>.*?</table>', re.DOTALL | re.IGNORECASE)
+        total_chars = len(markdown_content)
+        total_pages = metadata.get('page_count') or 1
+        doc_lines = markdown_content.split('\n')
 
         table_chunks = []
         tables_count = 0
 
-        for idx, match in enumerate(table_pattern.finditer(markdown_content)):
-            try:
-                html = match.group(0)
-                start_pos = match.start()
+        # 逐行扫描：找到 <table> 行，向上找最近的非空标题行
+        for line_no, line in enumerate(doc_lines):
+            stripped = line.strip()
+            if not re.match(r'(?i)<table[\s>]', stripped):
+                continue
 
-                # 向前查找表格标题（<table> 前最多300字符内）
-                preceding_text = markdown_content[max(0, start_pos - 300):start_pos]
-                preceding_lines = preceding_text.split('\n')
-                title = None
-                table_number = None
+            # 取出完整 HTML（单行或跨行都处理）
+            html = stripped
 
-                # 从后往前找最近的"表X"开头的行
-                for line in reversed(preceding_lines[-5:]):
-                    line = line.strip()
-                    # 匹配"表A2 Ex i装置检查一览表"
-                    m = re.search(r'表\s*([A-Z0-9][A-Z0-9\.\-]*)\s+(.*)', line)
-                    if m:
-                        table_number = m.group(1)
-                        title = line
-                        break
-                    # 只有"表A2"
-                    m2 = re.match(r'表\s*([A-Z0-9][A-Z0-9\.\-]*)', line)
+            # 向上最多扫描 8 行找标题
+            title = None
+            table_number = None
+            for prev_no in range(line_no - 1, max(line_no - 9, -1), -1):
+                prev = doc_lines[prev_no].strip()
+                if not prev:
+                    continue
+                m = _TITLE_RE.match(prev)
+                if m:
+                    table_number = m.group(1)
+                    title = prev
+                else:
+                    m2 = _TITLE_NO_TEXT_RE.match(prev)
                     if m2:
                         table_number = m2.group(1)
-                        title = line
-                        break
+                        title = prev
+                break  # 找到第一个非空行即停止，无论是否匹配标题
 
-                # 估算页码
-                total_chars = len(markdown_content)
-                total_pages = metadata.get('page_count') or 1
-                estimated_page = max(1, int(start_pos / total_chars * total_pages))
+            # 用字符位置估算页码
+            char_pos = sum(len(doc_lines[i]) + 1 for i in range(line_no))
+            estimated_page = max(1, int(char_pos / total_chars * total_pages))
 
-                # 用 pandas 解析表格
-                text_content = html_table_to_markdown(html, title)
-                if not text_content or len(text_content) < 20:
-                    continue
+            text_content = html_table_to_gfm(html, title)
+            if not text_content or len(text_content) < 20:
+                continue
 
-                # 创建 Table DB 记录
+            try:
                 db_table = DBTable(
                     document_id=document_id,
                     table_number=table_number,
                     title=title,
                     page_number=estimated_page,
-                    table_index=idx,
+                    table_index=tables_count,
                     markdown_content=text_content,
-                    minio_path=f"tables/{metadata.get('standard_no', 'unknown')}/table_{idx}.txt",
+                    minio_path=f"tables/{metadata.get('standard_no', 'unknown')}/table_{tables_count}.txt",
                 )
                 db.add(db_table)
-                db.flush()  # 获取 db_table.id
+                db.flush()
 
-                # 创建 content_type='table' 的 Chunk（待向量化）
                 table_chunk = Chunk(
                     content=text_content,
                     chunk_type='parent',
@@ -546,22 +544,27 @@ class DocumentIngestionPipeline:
                     content_type='table',
                     page_start=estimated_page,
                     page_end=estimated_page,
-                    position_in_doc=idx,
+                    position_in_doc=tables_count,
                     meta_data={
                         'table_number': table_number,
                         'table_title': title,
                         'table_id': db_table.id,
+                        # 文档级过滤字段（供 Qdrant/ES 按文档过滤）
+                        'standard_no': metadata.get('standard_no'),
+                        'category': metadata.get('category'),
+                        'voltage_level': metadata.get('voltage_level'),
+                        'document_title': metadata.get('title'),
                     }
                 )
-                # 关联 Table.chunk_id
-                db_table.chunk_id = None  # 稍后更新
+                # chunk_id 在 _process_chunks() 完成后回写
+                db_table.chunk_id = None
 
                 table_chunks.append(table_chunk)
                 tables_count += 1
-                logger.debug(f"提取表格: {title or f'table_{idx}'}, 页码{estimated_page}")
+                logger.debug(f"提取表格: {title or f'table_{tables_count}'}, 页码{estimated_page}")
 
             except Exception as e:
-                logger.error(f"表格处理失败 (index={idx}): {e}", exc_info=True)
+                logger.error(f"表格处理失败 (line={line_no}): {e}", exc_info=True)
 
         if tables_count > 0:
             db.commit()
@@ -702,6 +705,8 @@ class DocumentIngestionPipeline:
                     char_count=chunk.char_count,
                     meta_data=chunk.meta_data,
                     related_chunk_ids=chunk.related_chunk_ids,
+                    related_resource_id=chunk.meta_data.get('table_id') if chunk.content_type == 'table' else None,
+                    related_resource_type='table' if chunk.content_type == 'table' else None,
                     has_dense_vector=True,
                     has_sparse_vector=True
                 )
@@ -756,6 +761,14 @@ class DocumentIngestionPipeline:
                 parent_id_map[chunk.content_hash] = db_chunk.id
                 if temp_id in associations:
                     associations[db_chunk.id] = associations.pop(temp_id)
+
+                # 回写 Table.chunk_id（表格块创建后关联回 DBTable）
+                if chunk.content_type == 'table' and chunk.meta_data.get('table_id'):
+                    table_id = chunk.meta_data['table_id']
+                    db_table = db.get(DBTable, table_id)
+                    if db_table:
+                        db_table.chunk_id = db_chunk.id
+
                 indexed_count += 1
 
         # 处理子块（设置 parent_chunk_id）
@@ -780,6 +793,9 @@ class DocumentIngestionPipeline:
         if es_docs:
             logger.info(f"Batch indexing {len(es_docs)} docs to Elasticsearch...")
             self.search_engine.bulk_index(es_docs)
+
+        # 提交 Table.chunk_id 更新
+        db.flush()
 
         logger.info(f"Indexed {indexed_count} chunks with associations")
         return indexed_count

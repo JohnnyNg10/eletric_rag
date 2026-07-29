@@ -114,10 +114,17 @@ class DocumentChunker:
         Returns:
             父子块列表
         """
+        # 表格已由 _process_tables() 单独提取并索引，此处替换为占位符避免重复
+        clean_content = re.sub(
+            r'<table>.*?</table>',
+            '[表格]',
+            content,
+            flags=re.DOTALL | re.IGNORECASE
+        )
         if doc_type == "standard":
-            return self._chunk_standard(content, doc_metadata, document_id)
+            return self._chunk_standard(clean_content, doc_metadata, document_id)
         else:
-            return self._chunk_textbook(content, doc_metadata, document_id)
+            return self._chunk_textbook(clean_content, doc_metadata, document_id)
 
     def _chunk_standard(self, content: str, doc_metadata: Dict, document_id: Optional[int]) -> List[Chunk]:
         """

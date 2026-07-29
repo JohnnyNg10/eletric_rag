@@ -355,7 +355,8 @@ class QueryService:
                 'reasoning_steps': retrieval_result.reasoning_steps,
                 'retrieval_time': retrieval_result.retrieval_time,
                 'steps_taken': retrieval_result.steps_taken,
-                'recall_count': len(retrieval_result.retrieved_chunks)
+                'recall_count': len(retrieval_result.retrieved_chunks),
+                'retrieved_chunk_ids': [c.chunk_id for c in retrieval_result.retrieved_chunks]
             }
 
         # 步骤4: 生成答案
@@ -714,9 +715,8 @@ class QueryService:
                     for record in reasoning_steps
                 ]
 
-            # 慢车道的 retrieved_chunk_ids（从 recall_count 推断，暂无具体 chunk_ids）
-            # TODO: 如果需要具体 chunk_ids，需要从 retrieval_result.retrieved_chunks 提取
-            retrieved_chunk_ids = []  # 慢车道暂不记录具体 chunk_ids
+            # 慢车道的 retrieved_chunk_ids
+            retrieved_chunk_ids = lane_info.get('retrieved_chunk_ids', [])
 
         query_log = QueryLog(
             user_id=user_id,

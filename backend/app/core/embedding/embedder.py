@@ -18,13 +18,20 @@ class Embedder:
 
     def __init__(self):
         from app.config import settings
+        import torch
 
         self.mode = settings.EMBEDDING_MODE.lower()  # "local" or "api"
         self.dense_model = None
         self.sparse_model = None
+        self.sparse_tokenizer = None
         self.api_client = None
 
+        # 设备选择（优先GPU）
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         logger.info(f"[Embedder] Initializing in {self.mode.upper()} mode")
+        if self.mode == "local":
+            logger.info(f"[Embedder] Using device: {self.device}")
 
         if self.mode == "local":
             self._load_models()
@@ -71,8 +78,8 @@ class Embedder:
             # 加载稠密向量模型（bge-large-zh-v1.5）
             dense_path = self._get_model_path(settings.EMBEDDING_MODEL)
             logger.info(f"Loading dense embedding model from: {dense_path}")
-            self.dense_model = SentenceTransformer(dense_path, device='cpu')
-            logger.info(f"Dense model loaded: {settings.EMBEDDING_MODEL}")
+            self.dense_model = SentenceTransformer(dense_path, device=str(self.device))
+            logger.info(f"Dense model loaded: {settings.EMBEDDING_MODEL} (device={self.device})")
 
         except Exception as e:
             logger.error(f"Failed to load dense model: {e}")
@@ -87,7 +94,8 @@ class Embedder:
             self.sparse_tokenizer = AutoTokenizer.from_pretrained(sparse_path)
             self.sparse_model = AutoModelForMaskedLM.from_pretrained(sparse_path)
             self.sparse_model.eval()
-            logger.info(f"Sparse model loaded: {settings.SPARSE_MODEL}")
+            self.sparse_model.to(self.device)
+            logger.info(f"Sparse model loaded: {settings.SPARSE_MODEL} (device={self.device})")
 
         except Exception as e:
             logger.warning(f"Failed to load sparse model: {e}")
@@ -179,6 +187,7 @@ class Embedder:
                 truncation=True,
                 max_length=512
             )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             # Forward pass
             with torch.no_grad():
