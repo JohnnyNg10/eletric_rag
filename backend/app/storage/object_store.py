@@ -28,6 +28,17 @@ class ObjectStore:
             secure=False  # 本地开发使用 HTTP
         )
 
+        # 外部访问客户端（用于生成可从外部访问的预签名URL）
+        if settings.MINIO_EXTERNAL_ENDPOINT:
+            self.external_client = Minio(
+                settings.MINIO_EXTERNAL_ENDPOINT,
+                access_key=settings.MINIO_ACCESS_KEY,
+                secret_key=settings.MINIO_SECRET_KEY,
+                secure=False
+            )
+        else:
+            self.external_client = self.client  # 如果没配置外部地址，使用内部客户端
+
         # 三个 bucket
         self.pdf_bucket = "electric-rag-pdfs"
         self.markdown_bucket = "electric-rag-markdown"
@@ -206,7 +217,7 @@ class ObjectStore:
         try:
             from datetime import timedelta
 
-            url = self.client.presigned_get_object(
+            url = self.external_client.presigned_get_object(
                 bucket_name=self.pdf_bucket,
                 object_name=object_name,
                 expires=timedelta(seconds=expires_seconds)
@@ -235,7 +246,7 @@ class ObjectStore:
         try:
             from datetime import timedelta
 
-            url = self.client.presigned_get_object(
+            url = self.external_client.presigned_get_object(
                 bucket_name=self.image_bucket,
                 object_name=object_name,
                 expires=timedelta(seconds=expires_seconds)

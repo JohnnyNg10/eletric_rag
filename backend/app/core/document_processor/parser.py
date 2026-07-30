@@ -17,6 +17,8 @@ import asyncio
 import tempfile
 import os
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -445,10 +447,15 @@ class PDFParser:
         logger.info(f"从 Markdown 中找到 {len(matches)} 个图片引用")
 
         # MinerU 服务的输出目录（包含任务ID子目录）
-        mineru_output = Path("D:/dl/MinerU/output")
+        mineru_output = Path(settings.MINERU_OUTPUT_DIR)
+        if not mineru_output.is_absolute():
+            # 相对路径，相对于backend目录
+            mineru_output = Path(__file__).parent.parent.parent.parent / mineru_output
+        mineru_output = mineru_output.resolve()
 
         # 可能的图片搜索目录
         search_dirs = [
+            mineru_output,  # MinerU输出目录（优先）
             pdf_path.parent / "images",  # 与PDF同级
             pdf_path.parent / "output" / "images",
             pdf_path.parent,

@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     MINIO_HOST: str = "localhost"
     MINIO_PORT: int = 9000
     MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_EXTERNAL_ENDPOINT: Optional[str] = None  # 外部访问地址，用于生成预签名URL（如 "172.20.108.156:9000"）
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_BUCKET: str = "electric-rag"
@@ -165,6 +166,7 @@ class Settings(BaseSettings):
 
     # MinerU API Configuration
     MINERU_API_URL: str = "http://127.0.0.1:8001"  # MinerU API 地址
+    MINERU_OUTPUT_DIR: str = "../MinerU/output"  # MinerU 输出目录（相对于backend/或绝对路径）
     MINERU_BACKEND: str = "pipeline"  # pipeline (纯CPU) / hybrid-engine (需GPU)
     MINERU_SYNC_TIMEOUT: int = 120  # 同步模式超时（秒）
     MINERU_ASYNC_POLL_INTERVAL: int = 3  # 异步轮询间隔（秒）

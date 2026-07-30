@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { executeQuery, getConversationHistory, preprocessQuery } from '../api/query';
 import { getErrorMessage, isAbortError, isTimeoutError } from '../api/client';
 import type { Citation, Lane, PreprocessResponse, QueryResultMeta } from '../types/query';
+import { generateUUID } from '../utils/uuid';
 import {
   buildClarificationContext,
   buildVaguenessWarning,
@@ -240,7 +241,7 @@ export function useConversation({ accessToken }: { accessToken: string }) {
         // 如果是新会话，立即生成conversation_id
         let currentConversationId = conversationId;
         if (!currentConversationId) {
-          currentConversationId = crypto.randomUUID();
+          currentConversationId = generateUUID();
           setConversationId(currentConversationId);
         }
 
