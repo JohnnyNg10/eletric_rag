@@ -130,8 +130,17 @@ export function preprocessMath(text: string): string {
 }
 
 /**
- * 统一预处理：数学公式转换 + 引用标记转换
+ * 处理图片引用标记
+ * 将 [图片引用:N] 转换为特殊的占位符，供组件识别和渲染
+ * 例如：[图片引用:2] → __IMAGE_REF_2__
+ */
+export function convertImageReferences(text: string): string {
+  return text.replace(/\[图片引用:(\d+)\]/g, '__IMAGE_REF_$1__');
+}
+
+/**
+ * 统一预处理：数学公式转换 + 引用标记转换 + 图片引用转换
  */
 export function preprocessAnswer(answer: string): string {
-  return convertCitationMarkers(preprocessMath(answer));
+  return convertImageReferences(convertCitationMarkers(preprocessMath(answer)));
 }

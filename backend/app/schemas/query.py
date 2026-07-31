@@ -24,6 +24,9 @@ class QueryRequest(BaseModel):
     # 缓存策略选择
     cache_strategy: Optional[str] = Field(default="exact", description="缓存策略：exact(精确匹配) 或 semantic(语义匹配)")
 
+    # 视觉检索策略参数
+    strategy_params: Optional[Dict[str, Any]] = Field(default=None, description="策略参数（用于动态控制检索行为）")
+
     @field_validator('query')
     @classmethod
     def validate_query(cls, v: str) -> str:
@@ -59,6 +62,19 @@ class QueryRequest(BaseModel):
             raise ValueError("user_lane 必须是 'fast' 或 'slow'")
         return v
 
+    @field_validator('strategy_params')
+    @classmethod
+    def validate_strategy_params(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if v is not None:
+            # 验证 enable_visual_recall 字段（如果存在）
+            if 'enable_visual_recall' in v and not isinstance(v['enable_visual_recall'], bool):
+                raise ValueError("strategy_params.enable_visual_recall 必须是布尔值")
+            # 验证 visual_top_k 字段（如果存在）
+            if 'visual_top_k' in v:
+                if not isinstance(v['visual_top_k'], int) or v['visual_top_k'] <= 0:
+                    raise ValueError("strategy_params.visual_top_k 必须是正整数")
+        return v
+
 
 class ImageInfo(BaseModel):
     """图片信息"""
@@ -81,6 +97,7 @@ class Citation(BaseModel):
     images: List[ImageInfo] = Field(default_factory=list, description="关联的图片列表")
     page_number: Optional[int] = Field(default=None, description="引用所在页码")
     pdf_url: Optional[str] = Field(default=None, description="PDF预签名URL")
+    source_type: str = Field(default="text", description="来源类型：text(文本召回) / visual(视觉召回)")
 
 
 class OptimizationOption(BaseModel):
@@ -105,6 +122,9 @@ class QueryResponse(BaseModel):
     generation_time: Optional[int] = Field(default=None, description="生成耗时（ms）")
     expanded_queries: List[str] = Field(default_factory=list, description="扩展的查询")
     query_log_id: Optional[int] = Field(default=None, description="查询日志ID")
+
+    # 召回统计信息
+    recall_stats: Optional[Dict[str, int]] = Field(default=None, description="召回统计（各路召回数量）")
 
     # need_clarification 时填充
     vagueness_score: Optional[float] = Field(default=None, description="笼统度评分（0-1）")

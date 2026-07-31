@@ -409,14 +409,18 @@ class FastLane:
 
         # 优化：如果启用HyDE，先并行执行非向量召回
         if enable_hyde and hyde_query:
-            # 立即启动keyword和structured召回（不依赖HyDE）
+            # 立即启动keyword、structured、visual召回（不依赖HyDE）
             keyword_tasks = []
             structured_task = None
+            visual_task = None
 
             for q in queries:
                 keyword_tasks.append(self._recall_engine.keyword_recall.search(q, filters, top_k=20))
 
             structured_task = self._recall_engine.structured_recall.search(main_query, filters, top_k=10)
+
+            # 视觉召回（无条件执行）
+            visual_task = self._recall_engine.visual_recall.search(main_query, filters, top_k=50)
 
             # 同时启动向量召回（使用HyDE query）
             vector_tasks = []
@@ -428,14 +432,15 @@ class FastLane:
             keyword_results = await asyncio.gather(*keyword_tasks)
             structured_results = await structured_task
             vector_results = await asyncio.gather(*vector_tasks)
+            visual_results = await visual_task
 
-            # 合并所有结果
-            all_chunk_lists = list(vector_results) + list(keyword_results) + [structured_results]
+            # 合并所有结果（包含视觉召回）
+            all_chunk_lists = list(vector_results) + list(keyword_results) + [structured_results, visual_results]
             recalled_chunks = self._recall_engine._merge_deduplicate(all_chunk_lists)
 
             logger.info(f"[FastLane] Optimized recall: vector={sum(len(r) for r in vector_results)}, "
                        f"keyword={sum(len(r) for r in keyword_results)}, structured={len(structured_results)}, "
-                       f"merged={len(recalled_chunks)}")
+                       f"visual={len(visual_results)}, merged={len(recalled_chunks)}")
         else:
             # 非HyDE模式，使用原有逻辑
             recalled_chunks = await self._recall_engine.recall(

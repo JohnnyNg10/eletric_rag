@@ -1,10 +1,11 @@
 """
 召回层 (Recall Layer)
 
-三路并行召回：
+四路并行召回：
 1. 向量召回 (Vector Recall) - Qdrant 混合检索
 2. 关键词召回 (Keyword Recall) - Elasticsearch BM25
 3. 结构化召回 (Structured Recall) - MySQL 精确查询
+4. 视觉召回 (Visual Recall) - ColPali 视觉检索
 """
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
@@ -617,12 +618,15 @@ class StructuredRecall:
 
 
 class MultiPathRecall:
-    """三路并行召回"""
+    """四路并行召回"""
 
     def __init__(self, db: Session):
         self.vector_recall = VectorRecall()
         self.keyword_recall = KeywordRecall()
         self.structured_recall = StructuredRecall(db)
+        # 导入视觉召回（懒加载，只有启用时才会加载模型）
+        from app.core.retrieval.visual_recall import visual_recall
+        self.visual_recall = visual_recall
 
     async def recall(
         self,
@@ -632,7 +636,7 @@ class MultiPathRecall:
         hyde_query: Optional[str] = None
     ) -> List[ChunkResult]:
         """
-        三路并行召回
+        四路并行召回
 
         Args:
             query: 标准化后的查询
@@ -650,10 +654,11 @@ class MultiPathRecall:
             f"expanded={len(queries)}, filters={filters}, hyde={bool(hyde_query)}"
         )
 
-        # 步骤1: 所有查询并行发起向量+关键词召回
+        # 步骤1: 所有查询并行发起向量+关键词+结构化+视觉召回
         # - 第一个查询的向量召回使用 HyDE query（如果提供）
         # - 其余扩展查询用原始文本做向量召回
         # - 结构化召回只用 query（精确匹配，重复无意义）
+        # - 视觉召回对所有查询执行（ColPali）
         all_tasks = []
         task_labels = []
 
@@ -667,7 +672,17 @@ class MultiPathRecall:
         all_tasks.append(self.structured_recall.search(query, filters, top_k=10))
         task_labels.append(("structured", query))
 
-        results = await asyncio.gather(*all_tasks)
+        # 视觉召回（无条件执行，相关性由 RRF 和 Reranker 决定）
+        all_tasks.append(self.visual_recall.search(query, filters, top_k=50))
+        task_labels.append(("visual", query))
+
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+        # 检查是否有任务失败
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                source_type, q = task_labels[i]
+                logger.error(f"[MultiPathRecall] Task {source_type} failed: {result}", exc_info=result)
 
         # 步骤2: 按来源分类，统计数量
         chunk_lists = []
@@ -675,6 +690,9 @@ class MultiPathRecall:
         chunk_id_to_sources: Dict[int, List[str]] = {}
 
         for (source_type, q), chunks in zip(task_labels, results):
+            # 跳过失败的任务（返回 Exception 对象）
+            if isinstance(chunks, Exception):
+                continue
             chunk_lists.append(chunks)
             source_counts[source_type] = source_counts.get(source_type, 0) + len(chunks)
             for chunk in chunks:
@@ -698,7 +716,8 @@ class MultiPathRecall:
             f"[MultiPathRecall] Done {elapsed_ms}ms | queries={len(queries)} "
             f"vector={source_counts.get('vector', 0)}, "
             f"keyword={source_counts.get('keyword', 0)}, "
-            f"structured={source_counts.get('structured', 0)} "
+            f"structured={source_counts.get('structured', 0)}, "
+            f"visual={source_counts.get('visual', 0)} "
             f"→ merged={len(all_chunks)} → top50={len(final_chunks)}"
         )
 

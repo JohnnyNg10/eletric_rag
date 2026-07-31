@@ -11,6 +11,62 @@ import { RelatedQueriesPanel } from '../result/RelatedQueriesPanel';
 import { preprocessAnswer } from '../../utils/query';
 import './ChatMessage.css';
 
+/**
+ * 渲染带图片引用的答案文本
+ * 识别 __IMAGE_REF_N__ 占位符并替换为图片组件
+ */
+function renderAnswerWithImages(text: string, citations: Citation[]) {
+  const parts: (string | JSX.Element)[] = [];
+  const pattern = /__IMAGE_REF_(\d+)__/g;
+  let lastIndex = 0;
+  let match;
+  let imageKey = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    // 添加占位符前的文本
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+
+    // 获取引用编号（匹配 citation.id 而不是数组索引）
+    const citationId = parseInt(match[1]);
+    const citation = citations?.find(c => c.id === citationId || c.index === citationId);
+
+    // 渲染图片
+    if (citation?.images && citation.images.length > 0) {
+      const image = citation.images[0];
+      parts.push(
+        <div key={`inline-img-${imageKey++}`} className="inline-image-container">
+          <img
+            src={image.url}
+            alt={image.caption || image.figure_number || '配图'}
+            className="inline-image"
+            loading="lazy"
+          />
+          {(image.figure_number || image.caption) && (
+            <div className="inline-image-caption">
+              {image.figure_number && <span className="image-figure-number">{image.figure_number}</span>}
+              {image.caption && <span className="image-caption-text">: {image.caption}</span>}
+            </div>
+          )}
+        </div>
+      );
+    } else {
+      // 如果没找到图片，保留文本提示
+      parts.push(<span key={`missing-img-${imageKey++}`} className="missing-image-ref">[图片引用:{match[1]}]</span>);
+    }
+
+    lastIndex = pattern.lastIndex;
+  }
+
+  // 添加剩余文本
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : [text];
+}
+
 interface ChatMessageProps {
   message: Message;
   onRelatedQueryClick?: (query: string) => void;
@@ -103,31 +159,41 @@ function AssistantMessage({ content, citations, metadata, status, onRelatedQuery
 
         {content && (
           <div className="message-content answer-markdown">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
-              components={{
-                table: ({ children }) => (
-                  <div className="markdown-table-scroll">
-                    <table>{children}</table>
-                  </div>
-                ),
-                a: ({ href, children }) => {
-                  if (href?.startsWith('#citation-')) {
-                    return (
-                      <a
-                        href={href}
-                        className="citation-inline-link"
-                        onClick={(e) => handleCitationLinkClick(e, href)}
-                      >
-                        {children}
-                      </a>
-                    );
-                  }
-                  return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
-                },
-              }}
-            >{preprocessAnswer(content)}</ReactMarkdown>
+            {renderAnswerWithImages(preprocessAnswer(content), citations || []).map((part, index) => {
+              if (typeof part === 'string') {
+                return (
+                  <ReactMarkdown
+                    key={index}
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={{
+                      table: ({ children }) => (
+                        <div className="markdown-table-scroll">
+                          <table>{children}</table>
+                        </div>
+                      ),
+                      a: ({ href, children }) => {
+                        if (href?.startsWith('#citation-')) {
+                          return (
+                            <a
+                              href={href}
+                              className="citation-inline-link"
+                              onClick={(e) => handleCitationLinkClick(e, href)}
+                            >
+                              {children}
+                            </a>
+                          );
+                        }
+                        return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+                      },
+                    }}
+                  >{part}</ReactMarkdown>
+                );
+              } else {
+                // 直接渲染图片组件
+                return part;
+              }
+            })}
           </div>
         )}
 

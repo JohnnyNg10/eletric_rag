@@ -963,6 +963,47 @@ strong {
   }
 }
 
+/* Inline Images (inserted via [图片引用:N]) */
+.inline-image-container {
+  margin: 20px 0;
+  padding: 16px;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.inline-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  display: block;
+  margin: 0 auto;
+}
+
+.inline-image-caption {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.inline-image-caption .image-figure-number {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.inline-image-caption .image-caption-text {
+  margin-left: 4px;
+}
+
+.missing-image-ref {
+  color: var(--color-warning);
+  font-style: italic;
+  font-size: 14px;
+}
+
 /* Citations */
 .citation-section {
   margin-top: 32px;
