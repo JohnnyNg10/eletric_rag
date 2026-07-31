@@ -127,3 +127,9 @@ backend/scripts/
 
 # Local utility scripts
 scripts/
+
+# Documentation (all docs except core README and CLAUDE.md)
+docs/
+
+# Docker configurations
+docker/
