@@ -173,6 +173,32 @@ class Settings(BaseSettings):
     MINERU_ASYNC_MAX_POLL_TIME: int = 600  # 异步最大轮询时间（秒）
     MINERU_ENABLED: bool = True  # 是否启用 MinerU（关闭则回退到 PyMuPDF）
 
+    # ========== 视觉检索配置 ==========
+
+    # 全局开关（唯一的功能开关）
+    ENABLE_VISUAL_RECALL: bool = True
+
+    # ColPali 模型配置
+    COLPALI_MODEL_NAME: str = "vidore/colqwen2-base"
+    COLPALI_MODEL_CACHE_DIR: str = r"C:\Users\39948\.cache\modelscope\hub\models\vidore\colqwen2-base"  # ModelScope 缓存路径
+    COLPALI_DEVICE: str = "cpu"  # cuda / cpu / npu (npu only on Linux)
+    COLPALI_VECTOR_DIM: int = 128  # colqwen2-base 向量维度（tomoro-colqwen3 是 320）
+
+    # 性能配置
+    VISUAL_RECALL_TIMEOUT_MS: int = 500        # 超时时间（毫秒）
+    VISUAL_RECALL_CACHE_TTL: int = 3600       # 缓存时长（秒）
+    VISUAL_RECALL_TOP_K: int = 50             # 召回数量
+
+    # 索引策略（按需索引，节省存储）
+    COLPALI_INDEX_MIN_SIZE: int = 1_000_000     # 最小图片尺寸（像素，1MP）
+    COLPALI_INDEX_MAX_SIZE: int = 100_000_000   # 最大图片尺寸（100MP）
+    COLPALI_INDEX_MIN_TEXT_DENSITY: int = 30    # 最小文字标注数
+
+    # RRF 参数（固定权重）
+    RRF_K_PARAMETER: int = 60                 # RRF 排名衰减参数
+    RRF_TEXT_WEIGHT: float = 0.75             # 文本路径权重（固定，包含3路）
+    RRF_VISUAL_WEIGHT: float = 0.25           # 视觉路径权重（固定，单路）
+
     class Config:
         env_file = ".env"
         case_sensitive = True

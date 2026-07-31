@@ -58,6 +58,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
 
 # Vector storage (runtime data)
 qdrant_storage/
@@ -100,3 +101,29 @@ docs/deployment/企业内网服务器部署方案.md
 !CLAUDE.md
 !*.example.md
 !RAG系统功能提升建议.md
+
+# Deployment archives and temporary scripts
+*.tar.gz
+*.bundle
+*.zip
+build_deploy.bat
+pack-backend-update.bat
+start.bat
+
+# Elasticsearch installation
+elasticsearch-*/
+
+# Docker compose for local development
+docker-compose.local.yml
+docker-compose.model-services.yml
+
+# Temporary scripts and utilities
+backend/cleanup_orphan_data.py
+backend/rebuild_qdrant_collection.py
+backend/test_*.py
+backend/debug_*.py
+backend/download_*.py
+backend/scripts/
+
+# Local utility scripts
+scripts/

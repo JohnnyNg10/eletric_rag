@@ -20,11 +20,13 @@ from app.core.document_processor.chunker import document_chunker, Chunk, compute
 from app.core.document_processor.metadata_extractor import metadata_extractor
 from app.core.document_processor.classifier import document_classifier
 from app.core.embedding import embedder
+from app.core.embedding.colpali_embedder import ColPaliEmbedder
 from app.storage.vector_store import vector_store
 from app.storage.search_engine import search_engine
 from app.storage.object_store import object_store
 from app.db.session import get_db
 from app.db.models import Document, Chunk as DBChunk, Image as DBImage, Table as DBTable
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,23 @@ class DocumentIngestionPipeline:
         self.search_engine = search_engine
         self.object_store = object_store
         self._storage_initialized = False
+
+        # ColPali embedder（懒加载，仅在启用视觉召回时初始化）
+        self.colpali_embedder = None
+        if settings.ENABLE_VISUAL_RECALL:
+            logger.info("[IngestionPipeline] Visual recall enabled, ColPali will load on first use")
+        else:
+            logger.info("[IngestionPipeline] Visual recall disabled")
+
+    def _ensure_colpali_loaded(self):
+        """确保 ColPali 模型已加载（懒加载）"""
+        if self.colpali_embedder is None and settings.ENABLE_VISUAL_RECALL:
+            logger.info("[IngestionPipeline] Loading ColPali model...")
+            self.colpali_embedder = ColPaliEmbedder(
+                model_path=settings.COLPALI_MODEL_CACHE_DIR,
+                device=settings.COLPALI_DEVICE
+            )
+            logger.info("[IngestionPipeline] ColPali model loaded successfully")
 
     def _ensure_storage_ready(self):
         """确保存储服务已初始化（collection/index/buckets）"""
@@ -293,7 +312,11 @@ class DocumentIngestionPipeline:
         db
     ) -> tuple:
         """
-        处理 VLM 解析出的图片：MinIO 上传 + DB 记录 + 向量索引
+        处理 VLM 解析出的图片：MinIO 上传 + DB 记录 + 双路索引（VLM描述 + ColPali视觉）
+
+        双路索引策略：
+        - VLM描述路径：所有图片生成文本描述 → BGE + SPLADE 向量
+        - ColPali视觉路径：所有图片生成 multi-vector（如果启用视觉召回）
 
         Returns:
             (images_count, image_chunk_data)
@@ -302,6 +325,12 @@ class DocumentIngestionPipeline:
         import tempfile
         import os
         import hashlib
+        from PIL import Image
+        import io
+
+        # 确保 ColPali 模型已加载（如果启用）
+        if settings.ENABLE_VISUAL_RECALL:
+            self._ensure_colpali_loaded()
 
         count = 0
         image_chunk_data = []
@@ -312,6 +341,7 @@ class DocumentIngestionPipeline:
                 description = img_info.get('description', '')
                 caption = img_info.get('caption', '')
                 figure_number = img_info.get('figure_number')
+                image_bytes = img_info['bytes']
 
                 # 1. 写临时文件，上传到 MinIO
                 object_name = (
@@ -319,7 +349,7 @@ class DocumentIngestionPipeline:
                     f"/p{img_info['page']}_{img_info['index']}.{ext}"
                 )
                 with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
-                    tmp.write(img_info['bytes'])
+                    tmp.write(image_bytes)
                     tmp_path = tmp.name
                 try:
                     self.object_store.upload_image(tmp_path, object_name)
@@ -335,7 +365,7 @@ class DocumentIngestionPipeline:
                     image_index=img_info.get('index'),
                     figure_number=figure_number,
                     caption=caption,
-                    file_size=len(img_info['bytes']),
+                    file_size=len(image_bytes),
                     vlm_description=description,
                     vlm_model=img_info.get('vlm_model', ''),
                     vlm_confidence=img_info.get('vlm_confidence', 0.0)
@@ -343,7 +373,7 @@ class DocumentIngestionPipeline:
                 db.add(db_image)
                 db.flush()
 
-                # 3. 为图片创建可检索的 image_description Chunk
+                # 3. 为图片创建可检索的 image_description Chunk（双路索引）
                 if description:
                     # 组装内容：图号 + 图注 + VLM 描述
                     content_parts = [f"[图片描述] 第{img_info['page']}页"]
@@ -355,8 +385,26 @@ class DocumentIngestionPipeline:
                     content = " ".join(content_parts)
 
                     content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+                    # 路径1: VLM 描述的文本向量（BGE + SPLADE）
                     dense_vector = self.embedder.encode(content).tolist()
                     sparse_vector = self.embedder.encode_sparse(content)
+
+                    # 路径2: ColPali 视觉向量（如果启用）
+                    colpali_vectors = None
+                    if settings.ENABLE_VISUAL_RECALL and self.colpali_embedder:
+                        try:
+                            # 加载图片为 PIL.Image
+                            pil_image = Image.open(io.BytesIO(image_bytes))
+                            # 生成 ColPali multi-vector
+                            colpali_vectors = self.colpali_embedder.encode_image(pil_image)
+                            logger.info(
+                                f"[IngestionPipeline] Generated ColPali vectors for image "
+                                f"p{img_info['page']}_{img_info['index']}: shape={colpali_vectors.shape}"
+                            )
+                        except Exception as e:
+                            logger.error(f"[IngestionPipeline] ColPali encoding failed: {e}")
+                            colpali_vectors = None
 
                     db_chunk = DBChunk(
                         document_id=document_id,
@@ -377,6 +425,7 @@ class DocumentIngestionPipeline:
                             'standard_no': metadata.get('standard_no'),
                             'category': metadata.get('category'),
                             'voltage_level': metadata.get('voltage_level'),
+                            'colpali_enabled': colpali_vectors is not None
                         }
                     )
                     db.add(db_chunk)
@@ -384,21 +433,47 @@ class DocumentIngestionPipeline:
                     vector_id = str(db_chunk.id)
                     db_chunk.vector_id = vector_id
 
-                    self.vector_store.upsert_points([{
-                        "id": vector_id,
-                        "dense_vector": dense_vector,
-                        "sparse_vector": sparse_vector,
-                        "payload": {
-                            "doc_id": document_id,
-                            "chunk_id": db_chunk.id,
-                            "chunk_type": "child",
-                            "content_type": "image_description",
-                            "text": content,
-                            "minio_path": object_name,
-                            "image_id": db_image.id,
-                            **{k: v for k, v in (metadata or {}).items() if v is not None}
-                        }
-                    }])
+                    # 存储到 Qdrant（双路索引）
+                    if colpali_vectors is not None:
+                        # 同时存储 VLM 描述向量和 ColPali 视觉向量
+                        self.vector_store.upsert_colpali(
+                            chunk_id=vector_id,
+                            vectors=colpali_vectors,
+                            dense_vector=dense_vector,
+                            sparse_vector=sparse_vector,
+                            payload={
+                                "doc_id": document_id,
+                                "chunk_id": db_chunk.id,
+                                "chunk_type": "child",
+                                "content_type": "image_description",
+                                "text": content,
+                                "minio_path": object_name,
+                                "image_id": db_image.id,
+                                "page_number": img_info.get('page'),
+                                "figure_number": figure_number,
+                                "colpali_enabled": True,
+                                **{k: v for k, v in (metadata or {}).items() if v is not None}
+                            }
+                        )
+                    else:
+                        # 仅存储 VLM 描述向量
+                        self.vector_store.upsert_points([{
+                            "id": vector_id,
+                            "dense_vector": dense_vector,
+                            "sparse_vector": sparse_vector,
+                            "payload": {
+                                "doc_id": document_id,
+                                "chunk_id": db_chunk.id,
+                                "chunk_type": "child",
+                                "content_type": "image_description",
+                                "text": content,
+                                "minio_path": object_name,
+                                "image_id": db_image.id,
+                                "page_number": img_info.get('page'),
+                                "figure_number": figure_number,
+                                **{k: v for k, v in (metadata or {}).items() if v is not None}
+                            }
+                        }])
 
                     self.search_engine.bulk_index([{
                         "chunk_id": vector_id,

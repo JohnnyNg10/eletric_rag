@@ -2,7 +2,7 @@
 name = "electric-rag-backend"
 version = "0.1.0"
 description = "Add your description here"
-requires-python = ">=3.13"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
@@ -35,10 +35,13 @@ dependencies = [
     "redis>=8.0.1",
     "sentence-transformers>=5.6.0",
     "sqlalchemy>=2.0.51",
-    "torch>=2.12.1",
+    "torch>=2.2.0,<2.12.0",
     "transformers>=5.13.0",
     "uvicorn[standard]>=0.50.1",
     "volcenginesdkarkruntime>=0.0.1",
+    "torchvision>=0.20.0",
+    "colpali-engine>=0.3.17",
+    "safetensors>=0.8.0",
 ]
 
 [dependency-groups]

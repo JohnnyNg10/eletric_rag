@@ -37,6 +37,96 @@ def get_proxy_from_env() -> Optional[str]:
     return proxy
 
 
+def _check_colpali_model_exists() -> bool:
+    """
+    检查 ColPali 模型是否已下载
+
+    Returns:
+        bool: 模型是否存在
+    """
+    from pathlib import Path
+
+    model_path = Path(settings.COLPALI_MODEL_CACHE_DIR)
+    # 检查关键文件（transformers 模型至少需要 config.json）
+    config_file = model_path / "config.json"
+    exists = config_file.exists()
+
+    if exists:
+        logger.info(f"✓ ColPali model found at {model_path}")
+    else:
+        logger.info(f"✗ ColPali model not found at {model_path}")
+
+    return exists
+
+
+def download_colpali_model() -> bool:
+    """
+    下载 ColPali 模型（~8GB，需要通过代理）
+
+    Returns:
+        bool: 下载是否成功
+    """
+    from pathlib import Path
+
+    model_name = settings.COLPALI_MODEL_NAME
+    cache_dir = Path(settings.COLPALI_MODEL_CACHE_DIR)
+    proxy = get_proxy_from_env()
+
+    logger.info(f"Downloading ColPali model: {model_name}")
+    logger.info(f"Destination: {cache_dir.absolute()}")
+    logger.info("Note: ColPali model is ~8GB, this will take a while...")
+
+    if proxy:
+        logger.info(f"Using proxy: {proxy}")
+    else:
+        logger.warning(
+            "No proxy detected. ColPali model is on HuggingFace — "
+            "set HTTP_PROXY if download fails"
+        )
+
+    try:
+        from huggingface_hub import snapshot_download
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        env_backup = {}
+        if proxy:
+            import os
+            env_backup = {
+                "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
+                "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
+            }
+            os.environ["HTTP_PROXY"] = proxy
+            os.environ["HTTPS_PROXY"] = proxy
+
+        try:
+            snapshot_download(
+                repo_id=model_name,
+                local_dir=str(cache_dir),
+                local_dir_use_symlinks=False,
+                resume_download=True,
+            )
+            logger.info(f"✓ ColPali model downloaded successfully to {cache_dir}")
+            return True
+
+        finally:
+            if proxy:
+                import os
+                for key, value in env_backup.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+    except Exception as e:
+        logger.error(f"✗ Failed to download ColPali model: {e}")
+        logger.error("Troubleshooting tips:")
+        logger.error(f"  1. Manually download {model_name} to {cache_dir}")
+        logger.error("  2. Set HTTP_PROXY for HuggingFace access")
+        logger.error("  3. Disable ColPali: set ENABLE_VISUAL_RECALL=False")
+        return False
+
+
 def init_models() -> bool:
     """
     初始化所有AI模型
@@ -70,16 +160,23 @@ def init_models() -> bool:
         if not download_manager.check_model_exists(model_name):
             missing_models[purpose] = model_name
 
+    # 单独检查 ColPali（路径不同，且可选）
+    colpali_missing = settings.ENABLE_VISUAL_RECALL and not _check_colpali_model_exists()
+
     # 如果所有模型都存在
-    if not missing_models:
+    if not missing_models and not colpali_missing:
         logger.info("✓ All models are already downloaded and ready")
         logger.info("="*60 + "\n")
         return True
 
     # 如果有缺失模型
-    logger.warning(f"Found {len(missing_models)} missing model(s):")
-    for purpose, model_name in missing_models.items():
-        logger.warning(f"  - [{purpose}] {model_name}")
+    if missing_models:
+        logger.warning(f"Found {len(missing_models)} missing model(s):")
+        for purpose, model_name in missing_models.items():
+            logger.warning(f"  - [{purpose}] {model_name}")
+
+    if colpali_missing:
+        logger.warning(f"  - [colpali] {settings.COLPALI_MODEL_NAME} (~8GB)")
 
     # 检查是否自动下载
     if not settings.AUTO_DOWNLOAD_MODELS:
@@ -102,26 +199,40 @@ def init_models() -> bool:
         logger.info("No proxy detected. If download fails, set HTTP_PROXY environment variable")
         logger.info("Example: export HTTP_PROXY=http://127.0.0.1:7897")
 
-    # 下载模型
-    try:
-        results = download_manager.download_all_models(missing_models, proxy=proxy)
+    success = True
 
-        # 检查是否全部成功
-        if len(results) == len(missing_models):
-            logger.info("✓ All missing models downloaded successfully")
-            return True
-        else:
-            logger.error("✗ Some models failed to download")
-            return False
+    # 下载常规模型
+    if missing_models:
+        try:
+            results = download_manager.download_all_models(missing_models, proxy=proxy)
 
-    except Exception as e:
-        logger.error(f"✗ Model initialization failed: {e}")
-        logger.error("\nTroubleshooting tips:")
-        logger.error("  1. Check network connection")
-        logger.error("  2. Set proxy: export HTTP_PROXY=http://127.0.0.1:7897")
-        logger.error("  3. Check HuggingFace service status")
-        logger.error("  4. Manually download models if needed")
-        return False
+            if len(results) == len(missing_models):
+                logger.info("✓ All missing base models downloaded successfully")
+            else:
+                logger.error("✗ Some base models failed to download")
+                success = False
+
+        except Exception as e:
+            logger.error(f"✗ Model initialization failed: {e}")
+            logger.error("\nTroubleshooting tips:")
+            logger.error("  1. Check network connection")
+            logger.error("  2. Set proxy: export HTTP_PROXY=http://127.0.0.1:7897")
+            logger.error("  3. Check HuggingFace service status")
+            logger.error("  4. Manually download models if needed")
+            success = False
+
+    # 下载 ColPali 模型（失败仅警告，不阻塞启动）
+    if colpali_missing:
+        colpali_ok = download_colpali_model()
+        if not colpali_ok:
+            logger.warning(
+                "ColPali model download failed — visual recall will be disabled. "
+                "Set ENABLE_VISUAL_RECALL=False to suppress this warning."
+            )
+            # ColPali 失败不影响整体返回值（降级处理）
+
+    logger.info("="*60 + "\n")
+    return success
 
 
 def check_models_ready() -> bool:
@@ -145,5 +256,9 @@ def check_models_ready() -> bool:
         if not download_manager.check_model_exists(model_name):
             logger.warning(f"Model not ready: [{purpose}] {model_name}")
             all_ready = False
+
+    if settings.ENABLE_VISUAL_RECALL and not _check_colpali_model_exists():
+        logger.warning(f"Model not ready: [colpali] {settings.COLPALI_MODEL_NAME}")
+        # ColPali 不阻塞就绪状态检查
 
     return all_ready

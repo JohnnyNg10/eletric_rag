@@ -3,20 +3,24 @@ Qdrant 向量数据库客户端
 
 支持：
 - 混合检索（稠密向量 + 稀疏向量 RRF 融合）
+- ColPali multi-vector 存储和检索（视觉检索）
 - Payload 过滤
 - 批量写入
 """
 from typing import List, Dict, Optional, Any
 from qdrant_client import QdrantClient
+from qdrant_client.async_qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, SparseVectorParams,
     PointStruct, SearchRequest, Filter,
     FieldCondition, MatchValue, MatchAny, Range,
     ScoredPoint, Prefetch, Query, FusionQuery,
-    Fusion, SparseVector, NamedSparseVector
+    Fusion, SparseVector, NamedSparseVector,
+    MultiVectorConfig, MultiVectorComparator
 )
 import logging
 import uuid
+import numpy as np
 
 from app.config import settings
 
@@ -28,6 +32,11 @@ class VectorStore:
 
     def __init__(self):
         self.client = QdrantClient(
+            host=settings.QDRANT_HOST,
+            port=settings.QDRANT_PORT,
+            timeout=30
+        )
+        self.async_client = AsyncQdrantClient(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT,
             timeout=30
@@ -50,6 +59,15 @@ class VectorStore:
                             size=1024,
                             distance=Distance.COSINE,
                             on_disk=False
+                        ),
+                        # ColPali multi-vector 配置（视觉检索，colqwen2-base 128维）
+                        "colpali": VectorParams(
+                            size=128,
+                            distance=Distance.COSINE,
+                            on_disk=False,
+                            multivector_config=MultiVectorConfig(
+                                comparator=MultiVectorComparator.MAX_SIM
+                            )
                         )
                     },
                     sparse_vectors_config={
@@ -308,6 +326,157 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Failed to get collection info: {e}")
             return {}
+
+
+    def upsert_colpali(
+        self,
+        chunk_id: str,
+        vectors: np.ndarray,  # (Seq_Len, 128) multi-vector, L2-normalized
+        dense_vector: Optional[List[float]] = None,  # VLM 描述的 BGE 向量（可选）
+        sparse_vector: Optional[Dict[str, List]] = None,  # VLM 描述的稀疏向量（可选）
+        payload: Dict[str, Any] = None
+    ) -> bool:
+        """
+        存储 ColPali multi-vector（用于视觉检索）
+
+        Args:
+            chunk_id: chunk ID
+            vectors: ColPali multi-vector (Seq_Len, 128)，L2 归一化
+            dense_vector: 可选的 BGE 稠密向量（VLM 描述）
+            sparse_vector: 可选的稀疏向量（VLM 描述）
+            payload: 元数据，必须包含 colpali_enabled=True
+
+        Returns:
+            bool: 是否成功
+
+        说明：
+            - 图片 chunk 可以同时有 VLM 描述向量和 ColPali 视觉向量
+            - colpali_enabled=True 标识该 chunk 支持视觉检索
+        """
+        try:
+            # 确保 payload 标记为启用 ColPali
+            if payload is None:
+                payload = {}
+            payload["colpali_enabled"] = True
+
+            # 转换 multi-vector 为 list
+            if isinstance(vectors, np.ndarray):
+                vectors_list = vectors.tolist()
+            else:
+                vectors_list = vectors
+
+            # 确保 ID 是 UUID
+            point_id = chunk_id
+            if isinstance(point_id, str):
+                try:
+                    point_id = uuid.UUID(point_id)
+                except ValueError:
+                    point_id = uuid.uuid5(uuid.NAMESPACE_DNS, point_id)
+
+            # 构建向量字典
+            vector_dict = {
+                "colpali": vectors_list  # multi-vector
+            }
+
+            # 如果提供了 VLM 描述向量，也一起存储（双路索引）
+            if dense_vector is not None:
+                vector_dict["dense"] = dense_vector
+            if sparse_vector is not None:
+                vector_dict["sparse"] = sparse_vector
+
+            # 插入点
+            point = PointStruct(
+                id=str(point_id),
+                vector=vector_dict,
+                payload=payload
+            )
+
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[point]
+            )
+
+            logger.info(f"Upserted ColPali multi-vector for chunk: {chunk_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to upsert ColPali vectors: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    async def colpali_search(
+        self,
+        query_vectors: np.ndarray,  # (Seq_Len, 128) multi-vector
+        filter_conditions: Optional[Dict[str, Any]] = None,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        ColPali 视觉检索（Late Interaction MaxSim）
+
+        Args:
+            query_vectors: 查询 multi-vector (Seq_Len, 128)
+            filter_conditions: Payload 过滤条件
+            limit: 返回结果数量
+
+        Returns:
+            检索结果列表
+
+        说明：
+            - 使用 MaxSim 计算相似度（Late Interaction）
+            - 只检索 colpali_enabled=True 的 chunk
+        """
+        try:
+            # 转换为 list
+            if isinstance(query_vectors, np.ndarray):
+                query_vectors_list = query_vectors.tolist()
+            else:
+                query_vectors_list = query_vectors
+
+            # 构建过滤器（只检索启用 ColPali 的 chunk）
+            base_filter = {
+                "must": [
+                    {"key": "colpali_enabled", "match": {"value": True}}
+                ]
+            }
+
+            # 合并用户提供的过滤条件
+            if filter_conditions:
+                if "must" in filter_conditions:
+                    base_filter["must"].extend(filter_conditions["must"])
+                if "should" in filter_conditions:
+                    base_filter["should"] = filter_conditions["should"]
+                if "must_not" in filter_conditions:
+                    base_filter["must_not"] = filter_conditions["must_not"]
+
+            query_filter = self._build_filter(base_filter)
+
+            # 执行 multi-vector 检索（真正的异步）
+            logger.info(f"[VectorStore] ColPali search: multi-vector MaxSim, limit={limit}")
+            results = await self.async_client.query_points(
+                collection_name=self.collection_name,
+                query=query_vectors_list,
+                using="colpali",
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True
+            )
+
+            # 转换为字典格式
+            return [
+                {
+                    "id": point.id,
+                    "score": point.score,
+                    "payload": point.payload
+                }
+                for point in results.points
+            ]
+
+        except Exception as e:
+            logger.error(f"ColPali search failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
 
 
 # 全局实例
